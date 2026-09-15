@@ -4,6 +4,7 @@ import type {
   Challenge as ChallengePublic,
   ChallengeFlag,
   ChallengeSolved,
+  EventPlatform,
   EventSummary,
   RemoteTargetInfo,
 } from "@aegisx/shared"
@@ -50,58 +51,86 @@ function agentStatusSummaryOf(
   return { agentCount: rows.length, counts }
 }
 
+/** The event-summary select (joined counts + subquery scalars). Both read
+ * faces share it; listEvents runs it unfiltered, getEvent scoped to one
+ * row. */
+function eventSummarySelect(db: Database) {
+  return db
+    .select({
+      ...getTableColumns(events),
+      challengeCount: count(challenges.id),
+      solvedCount: sql<number>`coalesce(sum(case when ${solvedChallengeSql} then 1 else 0 end), 0)`,
+      lastChallengeAt: max(challenges.updatedAt),
+      activeAgentCount: sql<number>`coalesce((select sum(case when a.status in ('running', 'idle') then 1 else 0 end) from agents a where a.event_id = events.id), 0)`,
+      lastAgentAt: sql<
+        string | null
+      >`(select max(a.updated_at) from agents a where a.event_id = events.id)`,
+    })
+    .from(events)
+    .leftJoin(challenges, eq(challenges.eventId, events.id))
+    .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
+}
+
+type EventSummaryRow = ReturnType<
+  ReturnType<typeof eventSummarySelect>["all"]
+>[number]
+
+/** One aggregated select row → the EventSummary wire shape. */
+function toSummary(
+  row: EventSummaryRow,
+  platform: EventPlatform | null
+): EventSummary {
+  const {
+    lastChallengeAt,
+    activeAgentCount,
+    lastAgentAt,
+    promptBrief,
+    ...event
+  } = row
+  const lastActivityAt = [lastChallengeAt, lastAgentAt].reduce<string>(
+    (latest, value) => (value && value > latest ? value : latest),
+    event.updatedAt
+  )
+  return {
+    ...event,
+    // The stored JSON string is parsed once at the wire boundary —
+    // agents and the UI both consume the structured brief.
+    promptBrief: parseEventPromptBrief(promptBrief),
+    challengeCount: event.challengeCount,
+    solvedCount: event.solvedCount,
+    activeAgentCount: activeAgentCount ?? 0,
+    lastActivityAt,
+    platform,
+  }
+}
+
 export function createCatalogReader(
   db: Database,
   platformService: PlatformService
 ) {
   const listEvents = (eventId?: string): EventSummary[] => {
-    const query = db
-      .select({
-        ...getTableColumns(events),
-        challengeCount: count(challenges.id),
-        solvedCount: sql<number>`coalesce(sum(case when ${solvedChallengeSql} then 1 else 0 end), 0)`,
-        lastChallengeAt: max(challenges.updatedAt),
-        activeAgentCount: sql<number>`coalesce((select sum(case when a.status in ('running', 'idle') then 1 else 0 end) from agents a where a.event_id = events.id), 0)`,
-        lastAgentAt: sql<
-          string | null
-        >`(select max(a.updated_at) from agents a where a.event_id = events.id)`,
-      })
-      .from(events)
-      .leftJoin(challenges, eq(challenges.eventId, events.id))
-      .leftJoin(challengeRemote, eq(challenges.id, challengeRemote.challengeId))
+    const query = eventSummarySelect(db)
     const rows = (eventId ? query.where(eq(events.id, eventId)) : query)
       .groupBy(events.id)
       .orderBy(events.createdAt)
       .all()
     const platforms = platformService.getPublicMany(rows.map((row) => row.id))
-    return rows.map(
-      ({
-        lastChallengeAt,
-        activeAgentCount,
-        lastAgentAt,
-        promptBrief,
-        ...event
-      }) => {
-        const lastActivityAt = [lastChallengeAt, lastAgentAt].reduce<string>(
-          (latest, value) => (value && value > latest ? value : latest),
-          event.updatedAt
-        )
-        return {
-          ...event,
-          // The stored JSON string is parsed once at the wire boundary —
-          // agents and the UI both consume the structured brief.
-          promptBrief: parseEventPromptBrief(promptBrief),
-          challengeCount: event.challengeCount,
-          solvedCount: event.solvedCount,
-          activeAgentCount: activeAgentCount ?? 0,
-          lastActivityAt,
-          platform: platforms.get(event.id) ?? null,
-        }
-      }
-    )
+    return rows.map((row) => toSummary(row, platforms.get(row.id) ?? null))
   }
 
-  const getEvent = (eventId: string) => listEvents(eventId)[0]
+  /** Single-event direct read: the same aggregation scoped to one row — no
+   * list-shaped machinery, and `undefined` for an unknown id. */
+  const getEvent = (eventId: string): EventSummary | undefined => {
+    const row = eventSummarySelect(db)
+      .where(eq(events.id, eventId))
+      .groupBy(events.id)
+      .get()
+    if (!row) return undefined
+    return toSummary(
+      row,
+      platformService.getPublicMany([row.id]).get(row.id) ?? null
+    )
+  }
 
   const listAttachments = (challengeIds: string[]): Attachment[] => {
     if (challengeIds.length === 0) return []

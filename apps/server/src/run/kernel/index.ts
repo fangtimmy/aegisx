@@ -284,6 +284,7 @@ export function createAgentKernel(deps: AgentKernelDeps) {
   // --- multi-session + flat backtrack (v12) --------------------------------
   const sessionOps = createAgentSessionOps({
     db,
+    dataDir: deps.dataDir,
     sessionOf: (agentId) => runtimes.get(agentId)?.session(),
     detachSession: (agentId) => {
       runtimes.get(agentId)?.unmountSession()

@@ -1,6 +1,6 @@
 # AegisX 架构概览
 
-活文档：描述当前（schema v28）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)，控制平面重设计（领域事件 / 计划 / 决策点）的取舍记录见 [control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)；沙箱生命周期对齐与自有会话模型的设计见 [sandbox-session-design-2026-09-13.md](sandbox-session-design-2026-09-13.md)。
+活文档：描述当前（schema v29）的实际架构，供定位代码时使用。历史设计与演进过程见 [archive/](archive/)，数据库迁移工作流见 [migrations.md](migrations.md)，控制平面重设计（领域事件 / 计划 / 决策点）的取舍记录见 [control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)；沙箱生命周期对齐与自有会话模型的设计见 [sandbox-session-design-2026-09-13.md](sandbox-session-design-2026-09-13.md)；分层装配 / 计划工具化 / 决策状态事件化 / 读模型投影化的本轮重设计见 [architecture-redesign-2026-09-15.md](architecture-redesign-2026-09-15.md)（已实施）。
 
 ## 总览
 
@@ -19,7 +19,7 @@ Bun monorepo，单一 lockfile，workspace 包互相以 `@aegisx/*` 引用：
 
 进程模型：**agent loop 在宿主 server 进程内**运行，基于 `@earendil-works/pi-coding-agent`（版本由根 `package.json` 的 `catalog` 统一声明、各 workspace 以 `catalog:` 引用，`overrides` 另行钉住传递依赖）。bash 与 CTF 工具链不在进程内执行：每个 agent 一个一次性 Kali 容器（主进程 `sleep infinity`，纯工具箱；命名 `aegisx-agent-<id8>`，prepare 时创建、settle 时销毁；调度者为 `aegisx-orch-<eventId8>`，机制相同），命令经 dockerode `exec` 送入；文件工具（read/edit/write/grep/find/ls）同样落到该容器，工作区双向 bind mount。同题 N 个 agent 共享的只有卷：workspace bind（题级）+ 命名缓存卷 `aegisx-ch-cache-<challengeId>`（挂 `/var/cache/apt/archives` 与 `/opt/aegisx-cache`，apt/pip/go 缓存跨容器复用，随题删除）。网络边界：solver 容器在默认 bridge 上持有 `NET_RAW`，出站不受限，宿主局域网亦可达（也可经 `container.networkMode` 共享 VPN 容器的网络命名空间）；系统强制的隔离是 solver↔宿主数据与 solver↔其他题目，不含 solver↔局域网，有需要时通过 `container.networkMode` 收紧。
 
-数据全部落在 `data/`（可用 `AEGISX_DATA_DIR` 改址）：`aegisx.sqlite`（库）、`attachments/`（附件，按赛事/题目分目录）、`events/<eventId>/challenges/<challengeId>/workspace`（求解者工作区，内含 `agents/<id8>` 与 `shared/`）、`events/<eventId>/orchestrator`（调度者工作区）。
+数据全部落在 `data/`（可用 `AEGISX_DATA_DIR` 改址）：`aegisx.sqlite`（库）、`attachments/`（附件，按赛事/题目分目录）、`archive/sessions/`（过期会话的归档文件）、`events/<eventId>/challenges/<challengeId>/workspace`（求解者工作区，内含 `agents/<id8>` 与 `shared/`）、`events/<eventId>/orchestrator`（调度者工作区）。
 
 **单镜像整机**（`containers/allinone`，详见其 README）：`AEGISX_EXEC_BACKEND=local` 时执行后端换成 `run/container/local-manager.ts` —— solver bash 直接以本进程命名空间内的 `bash -c` 子进程运行，bind 语义用「路径映射（cwd）+ 容器路径符号链接」复刻，不再有独立工具箱容器，题间隔离随之消失（单机自用取舍）。`AEGISX_BOOTSTRAP=1` 时 `src/bootstrap.ts` 在启动后按环境变量幂等地完成 provider / 赛事 / 平台绑定 / 拉题 / 调度者启动；镜像内的编译单二进制自带内嵌 SPA（`AEGISX_WEB_DIR` 仅在指向外部 dist 时使用）。
 
@@ -29,11 +29,12 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 - **`domain_events`** — 控制平面唯一事实源（append-only，全局单调 id，`causation_id` 串因果链）：agent 生命周期、队列秩序、flag 判定、fence 拒绝、计划与决策点。写路径单一：`run/domain-events/store.ts` 的 `emitDomainEvent` 在**同一个 SQLite 事务**里 append 事件 + 应用投影；`run/domain-events/projector.ts` 是投影表（agents / spawn_queue / queue_state / challenge_flags / challenge_remote / challenges 控制字段 / `plan_refs` / `decision_state`）的**唯一写者**。事件类型在 `run/domain-events/registry.ts` 单点声明（载荷校验 + decision-log 类型集）。`GET /api/events/:eventId/decisions` 是决策日志读面（web 的「决策日志」页签渲染它）。token 等凭据永不入事件载荷。
 - **`agents`** — 执行单元，一次解题尝试一行；`domain_events` 的投影。`challengeId` 为 null 即该赛事的调度者（orchestrator；每赛事至多一个，唯一索引强制）。model / systemPrompt / tools 在 spawn 时快照（`agent.spawned` 事件），冷恢复原样复用。**无凭据列**：agent 的 bearer 是每次 bash exec 时用 per-boot HMAC secret 短时铸造的（`infrastructure/agent-credentials.ts`，1h TTL），中间件验签 + 查行还原主体；事件流与投影都不涉及凭据。
-- **`sessions` + `session_entries`** — 自有会话存储，唯一的会话存储后端（`run/host/pi-session-adapter.ts` 把 pi 的内存会话树写入这两张表）：可查询字段（seq / type / role / tool_name / usage 六列 / parent / 时间戳）是一等列，pi 特有形状以 canonical envelope 存于 `body`（`run/host/session-entry-codec.ts` 声明的 kind 注册表），resume 经批量装载反解、不重演 append；`sessions.active_leaf_id` 持久化分支位置。`seq` 为会话内单调序。`session_entries` 是全库最大的表（每条消息一行），**没有自动保留/清理**：会话数据只在显式删除时消失（删 agent / session 走级联，回溯裁剪该会话尾部），因此长赛事下会持续增长。
+- **`sessions` + `session_entries`** — 自有会话存储，唯一的会话存储后端（`run/host/pi-session-adapter.ts` 把 pi 的内存会话树写入这两张表）：可查询字段（seq / type / role / tool_name / usage 六列 / parent / 时间戳）是一等列，pi 特有形状以 canonical envelope 存于 `body`（`run/host/session-entry-codec.ts` 声明的 kind 注册表），resume 经批量装载反解、不重演 append；`sessions.active_leaf_id` 持久化分支位置。`seq` 为会话内单调序。`session_entries` 曾是全库最大的表（每条消息一行）——现在没有读者直接扫它：用量统计走 **`usage_rollups` / `usage_tool_rollups` 投影**（entry 写入同事务增量维护，stats / 调度者 digest / 用量面 / 会话列表 messageCount 全部读投影），原始行按保留策略归档：保留清扫（`run/host/session-archive.ts`，日频）把**终态** agent 会话中最新条目早于 `data.sessionRetentionDays`（默认 30 天）的移出库、压成 `data/archive/sessions/<sessionId>.jsonl.gz`（gzip jsonl，按 seq 逐行；重归档按 seq 并集合并，冷唤醒续写的前缀不丢）。归档对读面透明：`loadMergedEntryRows` 把「归档前缀 + 库内存活行」按 seq 并档，时间线分页 / adapter resume / 回溯目标查找 / rollup 重算都读并档结果——条目离开了库，历史并没有消失；只有显式删除 agent / session（级联 + 归档文件清扫）才真正清除。回溯仍是物理尾删（仅库行；归档文件由下次归档按并集吸收）。
+- **`usage_rollups` / `usage_tool_rollups`** — 会话维度与会话×工具维度的用量投影（D 批）：由 adapter 的条目写事务增量推进（唯一写者；回溯同事务删后从并档读整体重算），行随 session 级联。全库唯一 usage 聚合副本，stats / digest / 用量 / 会话列表只读。
 - **`spawn_queue`** — 调度计划表（`queue.*` 事件的投影）。一项 = 「在题 X 上派一个 agent」，enqueue 恒为 append（同题多项是合法的并行计划）。生命周期 pending → running（回填 agentId）→ done / failed；`queue_state` 按赛事暂停排水。
 - **`channel_messages` + `channel_reads`** — 全部 agent 间通信的唯一账本。频道是派生键（见下），无频道表；`channel_reads` 记 (channelKey, readerKey) → lastReadMsgId，是投递去重锚点。
 - **`challenge_flags`** — 一题多解；`agentId` 无 FK（解题史须活得比 agent 行久），`source` 区分 agent 提交 / 手工录入。
-- **进度状态机** — `@aegisx/shared/progress.ts` 的 `progressOf` 是"这题解到什么程度"的**唯一定义**：输入是事实（已接受 flag 数、`challenges.required_flags`、平台终态判定、`manual_solve_state`、分值），输出 `{ state: unsolved|partial|solved, source, confirmed, required, earned, perFlag }`。**单 flag 题是退化子集**：`required === 1` 时 `partial` 不可达。服务端所有消费方（`run/fence.ts` 封禁与槽位、`run/service.ts` 解出清理、`run/scheduler-admin.ts` digest、`events/stats.ts`、`events/catalog.ts` 的 wire 投影、`platforms/challenge-state.ts` 的 SQL 镜像）都读它，web 与 SDK 读下发结果——不存在第二份"已解出"推导。`challenges.solved_at` 记首次进入 `solved` 的时刻，解出清理以它为幂等锚点（重同步揭示出更多 flag 导致 solved → partial → solved 回环时不会二次清理）。
+- **进度状态机** — `@aegisx/shared/progress.ts` 的 `progressOf` 是"这题解到什么程度"的**唯一定义**：输入是事实（已接受 flag 数、`challenges.required_flags`、平台终态判定、`manual_solve_state`、分值），输出 `{ state: unsolved|partial|solved, source, confirmed, required, earned, perFlag }`。**单 flag 题是退化子集**：`required === 1` 时 `partial` 不可达。服务端所有消费方（`run/fence.ts` 封禁与槽位、`run/flag-hooks.ts` 解出清理、`run/scheduler-admin.ts` digest、`events/stats.ts`、`events/catalog.ts` 的 wire 投影、`platforms/challenge-state.ts` 的 SQL 镜像）都读它，web 与 SDK 读下发结果——不存在第二份"已解出"推导。`challenges.solved_at` 记首次进入 `solved` 的时刻，解出清理以它为幂等锚点（重同步揭示出更多 flag 导致 solved → partial → solved 回环时不会二次清理）。
 - **`scheduler_config`** — 每赛事调度策略（模型、自然语言指令、target 槽位、flag 处置开关等）。
 - 其余：`events` / `event_platforms`（平台绑定）、`challenges` / `challenge_remote`（远程镜像状态）、`attachments`、`prompt_templates`、`platform_request_log`（失败的平台请求审计：请求头脱敏、保留 7 天）。
 
@@ -41,7 +42,7 @@ Event → Challenge → Workspace → Agent 四层。Workspace 是派生路径�
 
 状态机（`shared/domain.ts` 词表）：`running` / `idle` 为存活（`LIVE_AGENT_STATUSES`），终态 `completed` / `aborted` / `failed`。idle = 回合间保温（容器、槽位、会话都在），直到终态才释放。
 
-出生两条路：`spawn_queue` 排水（默认；调度者的计划与用户入队都走它）或用户面直接派发（`POST /challenges/:id/agents` 逃生舱，绕过队列，fence 照拦——SDK 侧已无此动词，调度者启动 = 计划里的 close + enqueue）。组装在 `run/agent-factory.ts`：创建该 agent 的一次性沙箱容器（`ensureContainerFor`，per-agent in-flight 单飞；仍在运行则复用），再建 host session。
+出生两条路：`spawn_queue` 排水（默认；调度者的计划与用户入队都走它）或用户面直接派发（`POST /challenges/:id/agents` 逃生舱，绕过队列，fence 照拦——SDK 侧已无此动词，调度者启动 = 计划里的 close + enqueue）。launch 入口是 `run/spawn-service.ts`（L3 spawn 面：admission 语义 + prime send 与投递），组装在 `run/kernel/agent-factory.ts`：创建该 agent 的一次性沙箱容器（`ensureContainerFor`，per-agent in-flight 单飞；仍在运行则复用），再建 host session。
 
 运行期守护：
 
@@ -63,8 +64,8 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 
 | 模块 | 职责 |
 |---|---|
-| `service.ts` | agent 生命周期管理：spawn / 终态 / 刷新 / 删除 / 用量统计；持有唯一的 per-agent 注册表 `Map<agentId, AgentRuntime>` |
-| `ports.ts` | 组装根的后绑定端口：`createRunPort` 提供写一次、读取前必须 bind 的类型化槽位，表达 service 内部循环装配的初始化契约（替代 `let x!` 与隐式声明顺序陷阱） |
+| `service.ts` | 薄组合面（A 批）：保留 `AgentService` 公共形状，逐成员转发到内核 / L3 模块并完成 principal 作用域断言——只做接线与转发，不持有 agent 状态；per-agent 注册表 `Map<agentId, AgentRuntime>` 在 `kernel/` |
+| `kernel/` | L2 agent 内核（A 批）：`index.ts`（runtimes 注册表 + 动词面 + 锁）、`agent-factory.ts`（spawn 组装，fence 经 admission 临界区钩子进入）、`agent-runtime.ts`（单 agent 所有权根与唯一终态路径）、`agent-status.ts`（状态事实 + LiveBus 半区）、`agent-session-ops.ts`（多会话 / 回溯）、`prompt.ts` / `tools.ts`；L3 的反应面（通知 / queue 释放 / 引擎喂食）在 `lifecycle-reactor.ts`，经 `registerLifecycle` 注册的出站回调进入内核；spawn 面入口是 `spawn-service.ts`（admission 语义 + launch 序列） |
 | `agent-runtime.ts` | 单个存活 agent 的所有权根：挂载的 host session、turn generation（send → drive → 代际校验的 settle）、finish_run 簿记、deadline/grace 定时器、`settle()`（唯一终态路径）与 `dispose()` |
 | `locks.ts` | `chainLock`：按 key 串接的 promise 锁原语（withLock / fence / start 锁共用） |
 | `clock.ts` | 统一时间层：`Clock`（时间源 + 定时器工厂，默认 `systemClock`，测试注入 fake clock）+ `TimerHub`（定时器注册表，`clear` / `disposeAll`）；运行期定时器一律经它 |
@@ -72,7 +73,7 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 | `domain-events/` | 领域事件层（registry / store / projector / routes）：控制平面事实的 append-only 流 + 同事务投影 + 决策日志 API（见数据模型一节） |
 | `plan/` | 调度者计划：`applier.ts` 的 `submitPlan`——整包同步校验（错误同回合喂回）→ `plan.proposed` → 快动作 inline、慢动作（stop/close/finish/冷唤醒 message）进 per-event 单飞链并逐条重校验 → `plan.result`；(schedulerAgentId, ref) 幂等去重 |
 | `decision-points/engine.ts` | 决策点引擎：调度者唤醒的唯一来源——触发（settled / flag / queue.changed / launch.failed / timedOut / user.directive / solver.asked / periodic 心跳 / boot.resync）合并成决策点，驱动调度者回合并以 submit_plan 登记关联；违约阶梯（一次重申 → violation 留档 → 连续三次升级）；scheduler paused / queue paused / unattended 闸门收在这里；noOp 后局面（指纹）持续 ≥ stallMs 不变 → `watchdog.escalated` 升级。每赛事状态事实化（C 批）：triggered / flushed / reprompted / stall_cleared 事实 + `decision_state` 投影，构造时水合、重启不丢；运行时语义（合并 / 紧急冲刷 / 阶梯 / stall）不变 |
-| `agent-factory.ts` | 一次 spawn 的完整组装（容器 → host session → 工具注入）；prepare 成功即把 session 挂到该 agent 的 runtime 上 |
+| `kernel/agent-factory.ts` | 一次 spawn 的完整组装（容器 → host session → 工具注入）；prepare 成功即把 session 挂到该 agent 的 runtime 上 |
 | `queue.ts` | spawn 队列存储与状态：条目 CRUD、pending→running→终态流转、每赛事暂停（`queue_state`）——全部写经领域事件投影；队列低水位等边沿已归决策点引擎触发器 |
 | `drainer.ts` | 排水循环（200ms 去抖单飞，经 effects 原语）：`planDrainStep` 把启动围栏判定翻译为 launch/skip/cancel/stop；`global_capacity` 停轮后按有界间隔自唤醒重试；launch 失败 → item `failed` + 紧急触发决策点；围栏拒绝逐条落 `fence.blocked` 事实 |
 | `fleet-watchdog.ts` | 赛事级生命体征看门狗：pending 无 solver 且排水停滞 → `watchdog.escalated` + urgent orch 告警 + `fleet.stalled` 决策点（去重、状态恢复重置；引擎落地后不再承担唤醒） |
@@ -83,13 +84,13 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 | `workspace/` | 文件工具实现与 docker exec 后端 |
 | `bash-tool.ts` | 容器内 bash 工具 |
 | `model-resolver.ts` / `model-runtime.ts` | canonical 模型引用 `aegisx-<providerId>/<modelId>:<effort>` 的解析与运行时模型表（新 provider 惰性刷新） |
-| `sse.ts` | 唯一的实时流出口：`GET /api/stream` 一条 SSE 连接承载全部 agent 事件与频道消息（LiveBus → SSE，走 bus 全局订阅；载荷自带 `agentId` / `message.channelKey`，由客户端分发）。保留慢客户端背压合并（每 streaming 身份只留最高 revision）与 seed-before-subscribe |
+| `sse.ts` | 唯一的实时流出口：`GET /api/stream` 一条 SSE 连接承载全部 agent 事件与频道消息（LiveBus → SSE，走 bus 全局订阅；载荷自带 `agentId` / `message.channelKey`，由客户端分发）。保留慢客户端背压合并（每 streaming 身份只留最高 revision）与 seed-before-subscribe；频道帧携带账本行 `id:`，重连的 EventSource 以 Last-Event-ID 换账本重放（D 批）——非频道帧刻意无 `id:`，不污染重放游标 |
 | `principal-scope.ts` | 数据层作用域断言：`assertMayTouchEvent` / `assertMayTouchChallenge` / `assertMayTouchAgent`（授权的数据层，见下） |
 | `routes.ts` / `scheduler-admin.ts` / `queries.ts` / `public.ts` | 用户面路由、调度管理面、查询与对外形状 |
 
 **授权分两层**（对 P0-1/2/8「每处手写 scope 条件，漏写即越权」的结构性收敛）：中间件 `infrastructure/agent-auth.ts` 把每个请求**解析一次**为 `Principal`——`{kind:"user"}`（无 token 的本机用户面）、`{kind:"agent", agentId, eventId, challengeId, role}`（token 还原）、`{kind:"system"}`（仅进程内调用方，HTTP 永远产生不了）——它的 `verdict` 决定「这类主体能否打这个端点」（agent API 面，403 by omission）；`run/principal-scope.ts` 的断言助手决定「这个主体能否碰这条数据」。凡跨主体可达的写操作/查询（channels 发帖、queue 操作、agents 管理面、spawn、fleet 等），service 方法签名收 principal 并在内部过同一断言，路由层只做参数解析与转发、不拼任何 scope 条件；channels 发帖另有作者↔principal 一致性断言（`resolveAuthor`），token 冒充 user/system/他人发帖从任何分支进入都会被拒。纯用户面（settings/providers/平台绑定等）verdict 已挡住 agent token，无需 principal。
 
-宿主侧支撑在 `apps/server/src/run/host/`（host 子层，原 `src/agents/`）：`host-session.ts`（pi loop 封装）、`event-pipeline.ts`（事件 → 会话树 + LiveBus + 计时元数据）、`pi-session-adapter.ts`（自有会话存储 ↔ pi SessionManager 适配，内部含 `session-entry-codec.ts`）、`live.ts`（LiveBus）、`model-switch.ts`（存活中换模型）。依赖方向由 lint 强制（`apps/server/.oxlintrc.json` 的 `no-restricted-imports` overrides）：host 是最内层，只能依赖叶子与更内层（`run/errors` / `run/bash-tool` / `run/model-runtime` / `run/container` / `run/workspace` / `db` / `lib`），不得反向 import 编排与路由模块；路由层与组合根——组合根（`app` / `bootstrap` / `index`）、用户面（`run/routes` / `run/scheduler-admin` / `run/sse` / `run/public`）、事件与平台面（`events` / `scheduler` / `platforms` / `settings` / `activity`）——不得深入 `run/host/*` 内部，只能经 service 或 `run/host/index.ts` 公共出口（例外：`run/service` / `run/agent-factory` / `run/agent-session-ops` 等构造 host 层的运行时内部消费者）。
+宿主侧支撑在 `apps/server/src/run/host/`（host 子层，原 `src/agents/`）：`host-session.ts`（pi loop 封装）、`event-pipeline.ts`（事件 → 会话树 + LiveBus + 计时元数据）、`pi-session-adapter.ts`（自有会话存储 ↔ pi SessionManager 适配，内部含 `session-entry-codec.ts`；条目写事务内同事务推进用量投影）、`session-archive.ts`（保留清扫 + 归档文件 + 透明并档读）、`usage-rollups.ts`（用量投影的唯一写者）、`session-queries.ts` / `entry-usage.ts`（消息读面与用量折算）、`live.ts`（LiveBus）、`model-switch.ts`（存活中换模型）。依赖方向由 lint 强制（`apps/server/.oxlintrc.json` 的 `no-restricted-imports` overrides）：host 是最内层，只能依赖叶子与更内层（`run/errors` / `run/bash-tool` / `run/model-runtime` / `run/container` / `run/workspace` / `db` / `lib`），不得反向 import 编排与路由模块；路由层与组合根——组合根（`app` / `bootstrap` / `index`）、用户面（`run/routes` / `run/scheduler-admin` / `run/sse` / `run/public`）、事件与平台面（`events` / `scheduler` / `platforms` / `settings` / `activity`）——不得深入 `run/host/*` 内部，只能经 service 或 `run/host/index.ts` 公共出口（例外：`run/service` / `run/kernel`（agent-factory / agent-session-ops）等构造 host 层的运行时内部消费者）。
 
 ## 协作层（channels）
 
@@ -132,7 +133,7 @@ LiveBus 的 per-agent 快照（context/queue/activity/running tools）由 bus �
 ## Web 前端（`apps/web/src/`）
 
 - `api/` — REST 客户端，类型直接取自 `@aegisx/shared`。
-- `stream/` — SSE 消费：`live-connection.ts` 是**进程级唯一** EventSource（应用根部接线；按 `agentId` / `message.channelKey` 自行分发，断线由 EventSource 原生重连，`onReconnect` / `onStatus` 供上层刷新与提示），`conversation-store.ts` 是按 agentId 键控的会话状态 + selector（stable/tail 记忆化 + rAF 批量通知；`retain()` 决定哪些 agent 的持久历史留在内存，其余只保留有界的实时状态），`parse-event.ts` 解析 LiveEvent。频道视图与对话视图共用这一条连接。
+- `stream/` — SSE 消费：`live-connection.ts` 是**进程级唯一** EventSource（应用根部接线；按 `agentId` / `message.channelKey` 自行分发，断线由 EventSource 原生重连并把频道帧的 Last-Event-ID 换成账本重放，`onReconnect` / `onStatus` 供上层刷新与提示），`conversation-store.ts` 是按 agentId 键控的会话状态 + selector（stable/tail 记忆化 + rAF 批量通知；`(sessionId, seq)` 双键游标 + 全量快照整体替换使活跃流与快照的合并全序化；`retain()` 决定哪些 agent 的持久历史留在内存，其余只保留有界的实时状态；重连后经 `GET .../messages?after=<lastSeq>` 补洞，响应的 `sessionHeadSeq`（会话真头）低于游标即判定服务端截断、整页重拉），`parse-event.ts` 解析 LiveEvent。频道视图与对话视图共用这一条连接。
 - `features/` — 页面域：events（赛事/题目/平台）、runs（agent 会话时间线与频道视图）、tasks（题中心任务视图 / 队列）、stats（统计）、activity（全局活动日志）、settings。
 - `domain/` / `components/` — 前端本地领域与 coss UI 组件库（只读）。
 

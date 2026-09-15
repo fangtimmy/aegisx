@@ -912,6 +912,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           ? { resumeFrom: { sessionId: row.sessionFile } }
           : {}),
         onUsageMaybeChanged: () => status.emitAgent(agentId),
+        dataDir,
         db,
         bus,
       })

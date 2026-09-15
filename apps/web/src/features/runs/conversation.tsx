@@ -6,7 +6,7 @@ import type {
   AgentDetail,
   AgentSessionSummary,
   AgentSummary,
-  MessageListItem,
+  MessageList,
   ModelRef,
 } from "@/api"
 import { ErrorBoundary } from "@/components/error-boundary"
@@ -54,8 +54,9 @@ export type ConversationProps = {
   closedReopenable: boolean
   /** Offer steer/followUp queue editing. */
   canEditQueue: boolean
-  /** Load durable committed messages (raw list; Conversation buckets by agent). */
-  loadMessages: () => Promise<MessageListItem[]>
+  /** Load durable committed messages after the per-session seq cursor (0 =
+   * full pull); Conversation applies the seq-ordered merge. */
+  loadMessages: (after: number) => Promise<MessageList>
   /** Send a message to the agent (steer / followUp / new turn). */
   sendMessage: (
     text: string,
@@ -222,11 +223,26 @@ export function Conversation(props: ConversationProps) {
   }, [store, agentId, onAgentUpdated])
 
   const loadMessages = useCallback(async () => {
-    const epoch = store.epochOf(agentId)
     try {
-      const items = await loadMessagesFn()
+      // Incremental catch-up: re-read only what the live stream's per-session
+      // cursor has not seen (0 = full pull). A server-side truncation BELOW
+      // our cursor (a backtrack from elsewhere rewound the seq space) is
+      // detected by the response's sessionHeadSeq — the session's true head,
+      // which the server stamps even when it sits below the cursor — and the
+      // view is rebuilt from scratch: the store resets, the retry is a full
+      // pull.
+      const after = store.cursorOf(agentId)
+      let epoch = store.epochOf(agentId)
+      let requested = after
+      let list = await loadMessagesFn(after)
+      if (list.sessionHeadSeq < after) {
+        store.reset(agentId)
+        epoch = store.epochOf(agentId)
+        requested = 0
+        list = await loadMessagesFn(0)
+      }
       setLoadError(null)
-      store.applySnapshot(agentId, items, epoch)
+      store.applySnapshot(agentId, list.items, epoch, requested)
     } catch (error) {
       // Surface the failure (e.g. agent deleted / unreachable) instead of a
       // silent empty timeline; a later reconnect retry that succeeds clears it.

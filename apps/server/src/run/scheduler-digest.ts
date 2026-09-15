@@ -9,14 +9,13 @@ import {
   challengeRemote,
   challenges,
   queueState,
-  sessionEntries,
   spawnQueue,
 } from "../db/schema"
 import type { SchedulerDigestContext } from "../orchestration/prompt-templates"
 import { collapseToAttempts } from "../platforms/wire"
 import { fmtClock } from "./channels-render"
 import { fenceSnapshot } from "./fence"
-import { usageTotalsSql } from "./host"
+import { agentUsageTotals } from "./host"
 import { fmtMs } from "./kernel"
 
 export type SchedulerDigestDeps = {
@@ -243,10 +242,11 @@ export function createSchedulerDigest(deps: SchedulerDigestDeps) {
   }
 
   /** Cumulative tokens spent on a challenge's agents, compact-formatted
-   * ("" when nothing was spent — the digest line omits the segment). */
+   * ("" when nothing was spent — the digest line omits the segment). Reads
+   * the usage_rollups projection (exact across archived sessions too). */
   function tokensOfChallenge(agentIds: string[]): string {
     if (agentIds.length === 0) return ""
-    const totals = usageTotalsSql(db, inArray(sessionEntries.agentId, agentIds))
+    const totals = agentUsageTotals(db, agentIds)
     if (totals.totalTokens <= 0) return ""
     if (totals.totalTokens >= 1_000_000) {
       return `${(totals.totalTokens / 1_000_000).toFixed(1)}M`

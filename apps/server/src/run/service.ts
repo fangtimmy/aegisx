@@ -40,6 +40,7 @@ import {
   actorLabel,
   emitDomainEvent,
 } from "./domain-events/store"
+import { createEffects } from "./effects"
 import { RunActionError } from "./errors"
 import { checkSpawnFence } from "./fence"
 import { createFlagHooks } from "./flag-hooks"
@@ -47,6 +48,10 @@ import { createFleetWatchdog } from "./fleet-watchdog"
 import { createAgentHost } from "./host/host"
 import type { AgentLoopSettings } from "./host/host-session"
 import { createLiveBus } from "./host/live"
+import {
+  deleteAgentSessionArchives,
+  sweepSessionArchives,
+} from "./host/session-archive"
 import { createAgentKernel, type SpawnAdmission } from "./kernel"
 import {
   createAgentEventPoster,
@@ -160,7 +165,7 @@ export function createAgentService(options: AgentServiceOptions) {
     getSettings,
     providers,
   })
-  const queries = createAgentQueries({ db })
+  const queries = createAgentQueries({ db, dataDir })
   const bus = createLiveBus()
 
   // Seed the built-in prompt templates (idempotent) so the service is
@@ -596,6 +601,28 @@ export function createAgentService(options: AgentServiceOptions) {
   })
   fleetWatchdog.start()
 
+  // The session archive retention sweep (D 批): terminal agents' sessions
+  // older than data.sessionRetentionDays move to data/archive/sessions as
+  // gzip jsonl (transparent merged reads keep history serveable). Daily
+  // cadence on the shared time layer, like the container sweep's boot
+  // counterpart.
+  const archiveEffects = createEffects(clock)
+  const SESSION_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000
+  archiveEffects.every(SESSION_SWEEP_INTERVAL_MS, () => {
+    try {
+      sweepSessionArchives(
+        db,
+        dataDir,
+        get(getSettings(), "data.sessionRetentionDays"),
+        clock.now()
+      )
+    } catch (error) {
+      console.error("session archive sweep failed", {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  })
+
   // The workspace file face (L4): trees as files + deletion sweeps.
   const workspaceFace = createWorkspaceFace({
     db,
@@ -888,6 +915,9 @@ export function createAgentService(options: AgentServiceOptions) {
         by: actorFromPrincipal(principal),
         afterSettle: () => {
           channels.cleanupAgentChannels(agentId)
+          // The agent's archive files go with the row (the sessions cascade
+          // in the DB; derived files need the explicit sweep).
+          deleteAgentSessionArchives(db, dataDir, agentId)
           // The agent's sandbox went with settle's destroy step; the row
           // vanishes below (cascading its sessions and queue reference).
           emitDomainEvent(db, {
@@ -937,6 +967,7 @@ export function createAgentService(options: AgentServiceOptions) {
     decisionEngine.close()
     await kernel.close()
     fleetWatchdog.close()
+    archiveEffects.dispose()
     queue.cancelDrain()
     planApplier.close()
     await kernel.disposeRuntimes()

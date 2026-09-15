@@ -26,7 +26,6 @@ export type {
   FleetInfo,
   LiveEvent,
   MessageList,
-  MessageListItem,
   ModelOption,
   ModelRef,
   ModelMetadata,

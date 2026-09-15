@@ -40,7 +40,7 @@ function seedAttempt(
 
 describe("attempt counting collapses queue-item replays (real dispatches only)", () => {
   test("listAgents + challenge agentStatusCounts count one attempt per queue item, preferring the live representative", () => {
-    const { db, close } = setupDb()
+    const { db, dir, close } = setupDb()
     try {
       seedEvent(db)
       seedChallenge(db, { id: "ch-1" })
@@ -69,7 +69,7 @@ describe("attempt counting collapses queue-item replays (real dispatches only)",
         createdAt: "2025-01-04T00:00:00.000Z",
       })
 
-      const queries = createAgentQueries({ db })
+      const queries = createAgentQueries({ db, dataDir: dir })
       const listed = queries.listAgents({ challengeId: "ch-1" })
       expect(listed.map((a) => a.id).toSorted()).toEqual(["direct", "g1-live"])
 

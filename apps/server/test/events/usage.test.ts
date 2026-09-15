@@ -87,10 +87,10 @@ function seedEntry(
   usage: ReturnType<typeof assistantUsage>
 ) {
   seedSessionEntry(db, {
-    sessionId: "sess-1",
+    sessionId: `sess-${agentId}`,
     agentId,
     seq,
-    id: `entry-${seq}`,
+    id: `entry-${agentId}-${seq}`,
     createdAt: "2025-01-01T00:00:00Z",
     message: { role: "assistant", usage, timestamp: 0 },
     usage: {

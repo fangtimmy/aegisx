@@ -1,6 +1,6 @@
 # 架构重设计：分层装配、计划原生工具化、控制面事件化与读模型投影化
 
-日期：2026-09-15 · 状态：**设计（已评审修订，未实施）** · 范围：A 分层装配 / B 计划原生工具化 / C 决策点状态事件化 / D 读模型投影化与会话保留；E 执行隔离与外围收敛**明确暂缓**（§6）
+日期：2026-09-15 · 状态：**已实施（A–D 四批同日落地，实施记录见 §11）** · 范围：A 分层装配 / B 计划原生工具化 / C 决策点状态事件化 / D 读模型投影化与会话保留；E 执行隔离与外围收敛**明确暂缓**（§6）
 
 本文只做设计与取舍记录，不改动任何代码。现状结论带 `文件:行号` 实证（对应当日 main）。标注 **【已定】** 的是方向性决策（含 2026-09-15 与用户的范围裁定：A–D 做、E 不做），**【建议】** 的仍是开放项。前置阅读：[control-plane-design-2026-09-13.md](control-plane-design-2026-09-13.md)（A/B/C 三件承重结构）与 [sandbox-session-design-2026-09-13.md](sandbox-session-design-2026-09-13.md)（D/E 两项），本文是它们的续篇，处理「正确概念贯彻不完全」遗留的四个结构痛点。
 
@@ -216,3 +216,21 @@ EventStats 的 per-agent `toolCalls`（`stats.ts:62/348`）与逐工具分解 `t
 | 13 | NIT | 计划 TypeBox schema 实际住在 routes.ts 而非 shared → §3.1 加「先上移」前置；注入通路（extraTools）与 HTTP 退役无回归已实证 |
 | 14 | NIT | 薄组合面须承诺纯接线转发 → §2.2 明示 |
 | 15 | NIT | 写放大与重入安全性核实通过（触发频率 = 回合量级；trigger 调用点均在事务外）；批序成立，B 语料是最长杆 |
+
+## 11. 实施记录（2026-09-15 同日落地）
+
+| 批次 | 内容 | 提交 |
+|---|---|---|
+| A | `run/kernel/` 抽出（index.ts 组装 + runtimes 注册表与动词面、agent-factory 含 admission 钩子、agent-runtime 唯一终态路径、agent-status 状态事实半区、agent-session-ops 多会话/回溯）；fence 出 factory 入 L3，`spawn-service.ts` 为 launch 入口，`lifecycle-reactor.ts` 承接状态副作用面；`service.ts` 解散为薄组合面（只接线转发 + principal 断言）；`ports.ts` 与全部 late-binding 槽位删除；oxlint 边界扩展（kernel 只许经 index 公共出口） | `e9661a8` |
+| B | TypeBox 计划 schema 上移 `@aegisx/shared`；orchestrator 会话注入宿主侧原生 `submit_plan` 工具（extraTools 通路，spawn 与重开一致，不读 tools 快照），handler 进程内直呼 applier 并以回合代际登记；`plan_refs` 投影表（schema v27）承接幂等查重；SDK 删除 submit_plan 与全部 plan 助手（contract 负断言）；调度者语料重写为工具收束协议 | `efa96ce` |
+| C | `decision_point.triggered / flushed / reprompted / stall_cleared` 事实化 + `decision_state` 投影表（schema v28，projector 同事务维护）；引擎构造时水合、重启不丢（孤儿 open point 以 `closed(outcome=error, reason=boot)` 收尾）；`boot.resync` 收窄为未决业务或 running 打断两类，安静 idle 赛事零唤醒 | `8e71563` |
+| D | `usage_rollups` / `usage_tool_rollups` 投影（schema v29）：adapter 条目写显式事务内增量推进，回溯同事务删后从并档读整体重算；stats / catalog 单赛事直读 / 调度者 digest / 会话列表 messageCount 全部改读投影；SSE 频道帧携带账本 `id:` + Last-Event-ID 账本重放；`message.committed` 加 sessionId、web 端 `(sessionId, seq)` 双键游标 + 全量快照整体替换 + `sessionHeadSeq` 截断探测；会话归档（`data/archive/sessions/`，按 seq 并集合并）+ 透明并档读 + 保留清扫（`data.sessionRetentionDays`，默认 30） | （本提交） |
+
+**实施中的偏差记录**（与 §2–§5 正文对照）：
+
+- §2.2 的 agent-status 拆分落为「状态事实 + LiveBus 内核半（`kernel/agent-status.ts`）+ L3 生命周期反应器（`run/lifecycle-reactor.ts`，经 `registerLifecycle` 注册的单条 L2→L3 通道）」；回调次序（bus.forget → markDone → scheduleDrain → onAgentTerminal → notice）按正文契约保持。
+- §2.1 的 admission 钩子落为 `SpawnAdmission` 类型：fence 检查 + 全局 fence 锁由组合根绑定进钩子，内核只认识「admission 钩子」，不认识 fence 的内容与锁；锁序不变式随钩子契约重述。
+- `decision_point.flushed` 载荷带 `count`（正文 §4.1 只列 reason）；`decision_point.closed` 增带 `stallSinceMs`——stall episode 的投影字段之外，close 事实同步携带，决策日志因果更完整。
+- 同一调度者回合多次 `submit_plan` 时登记 **last-wins**（引擎取最后一次登记，正文未指定多计划语义）。
+- `decision_point.reprompted` 仅作决策日志因果；reprompt 相位本身仍在引擎内存（正文同判，落地予以确认）。
+- §5.1 的 session × 日维度 rollup（`usage_day_rollups`）在实施评审中**删除**：零消费方，仅为「以防以后需要」的日维度维护写放大不成立（n1 裁定）；需要时随真实消费方一起再加。

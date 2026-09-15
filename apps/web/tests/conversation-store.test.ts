@@ -78,6 +78,7 @@ function progressEvent(
 
 function committedEvent(
   agentId: string,
+  sessionId: string,
   key: string,
   seq: number,
   entry: Record<string, unknown>
@@ -85,6 +86,7 @@ function committedEvent(
   return {
     type: "message.committed",
     agentId,
+    sessionId,
     item: {
       key,
       seq,
@@ -156,7 +158,7 @@ describe("ConversationStore", () => {
     expect(streamed[1]!.type).toBe("agent")
 
     store.applyEvent(
-      committedEvent("a1", "draft", 2, {
+      committedEvent("a1", "s1", "draft", 2, {
         type: "message",
         id: "draft",
         timestamp: "2025-01-01T00:00:01Z",
@@ -253,26 +255,109 @@ describe("ConversationStore", () => {
 
   test("message.committed before the first snapshot is kept by it", () => {
     const store = new ConversationStore()
-    store.applyEvent({
-      type: "message.committed",
-      agentId: "a1",
-      item: userItem("hello", 1, "u1"),
-    })
+    store.applyEvent(
+      committedEvent("a1", "s1", "u1", 1, userItem("hello").entry)
+    )
     store.applySnapshot("a1", [])
     expect(store.get("a1")).toHaveLength(1)
   })
 
-  test("message.committed landing in the reset window is still dropped", () => {
+  test("a duplicate or replayed commit at or below the session cursor is dropped", () => {
     const store = new ConversationStore()
-    store.applySnapshot("a1", [userItem("old", 1, "u1")])
+    store.retain(["a1"])
+    store.ingest(committedEvent("a1", "s1", "u1", 1, userItem("one").entry))
+    store.ingest(committedEvent("a1", "s1", "u2", 2, userItem("two").entry))
+    // Same seq, different key (a replayed/duplicated frame or a stale draft):
+    // the seq-ordered merge rule drops it.
+    store.ingest(
+      committedEvent("a1", "s1", "u2-dup", 2, userItem("ghost").entry)
+    )
+    const items = store.get("a1")
+    expect(items).toHaveLength(2)
+    expect(items.some((i) => i.type === "user" && i.body === "ghost")).toBe(
+      false
+    )
+  })
+
+  test("cursors are per session: a new session's low seqs merge normally", () => {
+    const store = new ConversationStore()
+    store.retain(["a1"])
+    store.ingest(
+      committedEvent("a1", "s1", "u1", 5, userItem("old world", 5, "u1").entry)
+    )
+    expect(store.cursorOf("a1")).toBe(5)
+    // Session switch: reset clears state AND the cursor, then the new
+    // session's seq space restarts at 1 and merges without being dropped
+    // against the OLD session's cursor.
     store.reset("a1")
-    store.applyEvent({
-      type: "message.committed",
-      agentId: "a1",
-      item: userItem("ghost", 2, "u2"),
-    })
-    store.applySnapshot("a1", [])
-    expect(store.get("a1")).toHaveLength(0)
+    store.ingest(
+      committedEvent("a1", "s2", "n1", 1, userItem("new world", 1, "n1").entry)
+    )
+    expect(store.get("a1")).toHaveLength(1)
+    expect(store.cursorOf("a1")).toBe(1)
+  })
+
+  test("applySnapshot drops rows at or below the live cursor (catch-up merge)", () => {
+    const store = new ConversationStore()
+    store.retain(["a1"])
+    store.ingest(
+      committedEvent("a1", "s1", "u3", 3, userItem("three", 3, "u3").entry)
+    )
+    // A catch-up fetch (after=3) re-delivered rows 2..5: rows ≤ cursor are
+    // already held, rows above merge.
+    store.applySnapshot("a1", [
+      userItem("two", 2, "u2"),
+      userItem("four", 4, "u4"),
+      userItem("five", 5, "u5"),
+    ])
+    const items = store.get("a1")
+    expect(items.map((i) => (i.type === "user" ? i.body : null))).toEqual([
+      "three",
+      "four",
+      "five",
+    ])
+  })
+
+  test("reset clears the cursors so a post-backtrack full reload rebuilds state", () => {
+    const store = new ConversationStore()
+    store.retain(["a1"])
+    store.ingest(
+      committedEvent("a1", "s1", "u10", 10, userItem("ten", 10, "u10").entry)
+    )
+    expect(store.cursorOf("a1")).toBe(10)
+    store.reset("a1")
+    expect(store.cursorOf("a1")).toBe(0)
+    // The backtrack world reuses seqs: the fresh commit must merge.
+    store.applyEvent(
+      committedEvent("a1", "s1", "u6", 6, userItem("six", 6, "u6").entry)
+    )
+    expect(store.get("a1")).toHaveLength(1)
+  })
+
+  test("a stale commit landing in the reset window does not survive the full-pull snapshot", () => {
+    const store = new ConversationStore()
+    store.retain(["a1"])
+    store.ingest(
+      committedEvent("a1", "s1", "u10", 10, userItem("ten", 10, "u10").entry)
+    )
+    // A session op (backtrack) resets the store...
+    store.reset("a1")
+    // ...but the pre-reset in-flight commit frame lands in the window,
+    // poisoning the fresh cursor with the OLD session's seq.
+    store.ingest(
+      committedEvent("a1", "s1", "u10-ghost", 10, userItem("ghost", 10).entry)
+    )
+    expect(store.cursorOf("a1")).toBe(10)
+    // The following full-pull snapshot (after=0) carries the surviving rows.
+    // It REPLACES the stored rows and the poisoned cursor — a merge would
+    // drop seq ≤ 10 (i.e. everything) and leave the ghost alone.
+    store.applySnapshot("a1", [userItem("six", 6, "u6")], undefined, 0)
+    const items = store.get("a1")
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ type: "user", body: "six" })
+    // The cursor is the snapshot's head, not the stale seq: the next
+    // incremental catch-up resumes from real state.
+    expect(store.cursorOf("a1")).toBe(6)
   })
 
   test("agent.updated updates store state and notifies listeners", async () => {
@@ -316,7 +401,7 @@ describe("ConversationStore", () => {
     store.ingest(progressEvent("a2", "draft", 1, draft("two…")))
     store.ingest(toolEvent("a1", "tc-1", "running", 1))
     store.ingest(toolEvent("a2", "tc-2", "done", 2, { result: "two done" }))
-    store.ingest(committedEvent("a1", "draft", 2, draft("one done")))
+    store.ingest(committedEvent("a1", "s1", "draft", 2, draft("one done")))
     store.ingest(contextUpdatedEvent("a1"))
 
     const agentA = store.get("a1")
@@ -352,7 +437,7 @@ describe("ConversationStore", () => {
         message: { role: "assistant", content: [{ type: "text", text: "x" }] },
       })
     )
-    store.ingest(committedEvent("a2", "draft", 2, userItem("late").entry))
+    store.ingest(committedEvent("a2", "s2", "draft", 2, userItem("late").entry))
     expect(store.get("a2")).toHaveLength(0)
 
     store.ingest(toolEvent("a2", "tc-2", "running", 1))
@@ -377,7 +462,9 @@ describe("ConversationStore", () => {
 
     // A commit for the evicted agent no longer lands; the REST snapshot when
     // it is selected again is the durable source.
-    store.ingest(committedEvent("a2", "later", 9, userItem("later").entry))
+    store.ingest(
+      committedEvent("a2", "s2", "later", 9, userItem("later").entry)
+    )
     expect(store.get("a2")).toHaveLength(0)
   })
 

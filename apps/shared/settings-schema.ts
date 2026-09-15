@@ -2,7 +2,7 @@ import { isRecord } from "./agent"
 
 type SettingWidget = "boolean" | "number" | "text" | "select" | "model"
 
-type SettingGroup = "智能体" | "运行时" | "容器"
+type SettingGroup = "智能体" | "运行时" | "容器" | "数据"
 
 type BaseDef = {
   key: SettingKey
@@ -65,6 +65,7 @@ export type FlatSettings = {
   "runtime.maxAttachmentMb": number
   "runtime.platformRequestTimeoutMs": number
   "runtime.providerDiscoverTimeoutMs": number
+  "data.sessionRetentionDays": number
   "container.image": string
   "container.cpus": number
   "container.memoryMb": number
@@ -179,6 +180,19 @@ export const SETTINGS_DEFS: SettingDef[] = [
     title: "供应商发现超时（毫秒）",
     widget: "number",
     order: 110,
+  },
+  {
+    key: "data.sessionRetentionDays",
+    type: "integer",
+    default: 30,
+    minimum: 1,
+    maximum: 3650,
+    group: "数据",
+    title: "会话归档保留（天）",
+    description:
+      "终态 agent 的会话，其条目超过该天数后归档为压缩文件（data/archive/sessions），统计与时间线不受影响；删除 agent 时归档一并删除。",
+    widget: "number",
+    order: 10,
   },
   {
     key: "container.image",

@@ -7,12 +7,14 @@ import {
   SessionManager,
   type SessionEntry,
 } from "@earendil-works/pi-coding-agent"
-import { asc, eq } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 
 import type { Database } from "../../db"
 import { sessionEntries, sessions } from "../../db/schema"
 import { entryUsageOf } from "./entry-usage"
+import { loadMergedEntryRows } from "./session-archive"
 import { entryFromRow, toCanonicalBody } from "./session-entry-codec"
+import { applyRollupDelta, rollupDeltaOf } from "./usage-rollups"
 
 /**
  * pi 0.85.1 declares a `private constructor`, which makes `extends
@@ -165,10 +167,13 @@ export class PiSessionAdapter extends SessionManagerBase {
     })
   }
 
-  /** Reopen an existing session (resume / cold-restore). */
+  /** Reopen an existing session (resume / cold-restore). Entry rows come
+   * from the transparent merged read (database rows + the session archive's
+   * seq-disjoint prefix), so a session whose history was archived to disk
+   * reloads whole. */
   static open(
     sessionId: string,
-    opts: { agentId: string; db: Database }
+    opts: { agentId: string; db: Database; dataDir: string }
   ): PiSessionAdapter {
     const row = opts.db
       .select({
@@ -187,12 +192,7 @@ export class PiSessionAdapter extends SessionManagerBase {
         `PiSessionAdapter: session ${sessionId} belongs to agent ${row.agentId}, not ${opts.agentId}`
       )
     }
-    const rows = opts.db
-      .select()
-      .from(sessionEntries)
-      .where(eq(sessionEntries.sessionId, sessionId))
-      .orderBy(asc(sessionEntries.seq))
-      .all()
+    const rows = loadMergedEntryRows(opts.db, opts.dataDir, sessionId)
     const entries: SessionEntry[] = []
     let nextSeq = 0
     for (const entryRow of rows) {
@@ -264,22 +264,40 @@ export class PiSessionAdapter extends SessionManagerBase {
     // meta is computed pre-INSERT (NOT in onAppend, which is post-insert) so
     // it lands in the row itself and survives a refresh.
     const meta = this.metaProvider?.(view) ?? null
-    this.db
-      .insert(sessionEntries)
-      .values({
-        id: entry.id,
+    // One explicit transaction: entry row + leaf pointer + usage-rollup
+    // increments land together (crash-consistency — the rollup projections
+    // are only exact if they can never lag the row they summarize).
+    const indexColumns = indexColumnsOf(entry)
+    this.db.transaction((tx) => {
+      tx.insert(sessionEntries)
+        .values({
+          id: entry.id,
+          sessionId: this.getSessionId(),
+          agentId: this.agentId,
+          parentId: entry.parentId,
+          seq,
+          type: entry.type,
+          ...indexColumns,
+          createdAt: entry.timestamp,
+          ...(meta ? { meta: JSON.stringify(meta) } : {}),
+          body: JSON.stringify(toCanonicalBody(entry)),
+        })
+        .run()
+      tx.update(sessions)
+        .set({ activeLeafId: entry.id })
+        .where(eq(sessions.id, this.getSessionId()))
+        .run()
+      applyRollupDelta(tx, {
         sessionId: this.getSessionId(),
         agentId: this.agentId,
-        parentId: entry.parentId,
-        seq,
-        type: entry.type,
-        ...indexColumnsOf(entry),
-        createdAt: entry.timestamp,
-        ...(meta ? { meta: JSON.stringify(meta) } : {}),
-        body: JSON.stringify(toCanonicalBody(entry)),
+        toolName:
+          entry.type === "message" && entry.message.role === "toolResult"
+            ? (entry.message.toolName ?? null)
+            : null,
+        delta: rollupDeltaOf(indexColumns),
+        at: new Date().toISOString(),
       })
-      .run()
-    this.persistActiveLeaf(entry.id)
+    })
     this.onAppend?.(view, seq)
   }
 

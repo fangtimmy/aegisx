@@ -1,4 +1,5 @@
-import { eq, inArray } from "drizzle-orm"
+import type { ChannelMessagePublic } from "@aegisx/shared"
+import { asc, eq, gt, inArray } from "drizzle-orm"
 
 import { agents, channelMessages, channelReads, challenges } from "../db/schema"
 import {
@@ -124,6 +125,20 @@ export function createChannelService(deps: ChannelServiceDeps) {
     delivery.stopFlushLoop()
   }
 
+  /** Ledger rows after `after` (the SSE reconnect's Last-Event-ID), oldest
+   * first, in the public wire shape. The replay source for the channel
+   * face's stream resume: the ledger is durable, so a reconnecting client
+   * re-reads exactly the rows its cursor skipped. */
+  function replayAfter(after: number): ChannelMessagePublic[] {
+    return ctx.db
+      .select()
+      .from(channelMessages)
+      .where(gt(channelMessages.id, after))
+      .orderBy(asc(channelMessages.id))
+      .all()
+      .map(ctx.toPublic)
+  }
+
   delivery.startFlushLoop()
 
   return {
@@ -149,6 +164,7 @@ export function createChannelService(deps: ChannelServiceDeps) {
     listMessages: reads.listMessages,
     read: reads.read,
     readForAgent: reads.readForAgent,
+    replayAfter,
     agentChannels: reads.agentChannels,
     challengeChannelTree: reads.challengeChannelTree,
     unreadCount: reads.unreadCount,

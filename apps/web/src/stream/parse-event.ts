@@ -187,7 +187,11 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
     }
   }
   if (value.type === "message.committed") {
-    if (typeof value.agentId !== "string" || !isRecord(value.item))
+    if (
+      typeof value.agentId !== "string" ||
+      typeof value.sessionId !== "string" ||
+      !isRecord(value.item)
+    )
       return undefined
     const item = value.item
     const seq = numberValue(item.seq)
@@ -201,6 +205,7 @@ export function parseLiveEvent(value: unknown): LiveEvent | undefined {
     return {
       type: "message.committed",
       agentId: value.agentId,
+      sessionId: value.sessionId,
       item: {
         entry: item.entry,
         seq,

@@ -216,6 +216,11 @@ export type MessageList = {
   items: MessageListItem[]
   /** Highest seq in items (cursor for `?after=`). Null when empty. */
   nextAfter: number | null
+  /** The session's TRUE head — the merged (archive + database) max seq —
+   * even when it sits below the request's `after`. A client whose cursor
+   * exceeds it hit a server-side truncation (backtrack from another tab) and
+   * must reload from scratch. */
+  sessionHeadSeq: number
 }
 
 const ENTRY_TYPES = new Set([

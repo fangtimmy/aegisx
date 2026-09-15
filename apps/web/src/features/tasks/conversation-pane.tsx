@@ -281,7 +281,7 @@ function AgentConversation({
     [eventId, queryClient, agentId]
   )
   const loadMessages = useCallback(
-    () => agentsApi.listMessages(agentId).then((list) => list.items),
+    (after: number) => agentsApi.listMessages(agentId, after),
     [agentId]
   )
   const setQueue = useCallback(

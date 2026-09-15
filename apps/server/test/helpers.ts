@@ -24,6 +24,7 @@ import type { createPlatformService } from "../src/platforms/service"
 import { builtinModelProfile } from "../src/providers/builtin-models"
 import type { ContainerManager } from "../src/run/container/container-manager"
 import type { HostAgentSession } from "../src/run/host/host-session"
+import { applyRollupDelta, rollupDeltaOf } from "../src/run/host/usage-rollups"
 import {
   createAgentService,
   type AgentService,
@@ -67,7 +68,10 @@ export type EntryUsageSeed = {
  * fields as columns + the `{kind, ...typed, payload}` body envelope). Message
  * rows pass `message` (pi payload, verbatim); other kinds pass `kind` with
  * optional `typed` / `payload`. `usage` fills the usage columns at the
- * location the adapter would extract them from. */
+ * location the adapter would extract them from. The usage_rollups projection
+ * advances by the same increment the adapter's write transaction applies, so
+ * rollup-backed read faces (stats / usage / session lists) see seeded rows
+ * exactly like adapter-written ones. */
 export function seedSessionEntry(
   db: Database,
   seed: {
@@ -100,6 +104,7 @@ export function seedSessionEntry(
     kind === "message"
       ? { kind, payload: message ? { message } : {} }
       : { kind, ...seed.typed, payload: seed.payload ?? {} }
+  const createdAt = seed.createdAt ?? now()
   db.insert(sessionEntries)
     .values({
       id: seed.id ?? `${seed.sessionId}-e${seed.seq}`,
@@ -113,7 +118,7 @@ export function seedSessionEntry(
         messageRole === "toolResult" && typeof message?.toolName === "string"
           ? message.toolName
           : null,
-      createdAt: seed.createdAt ?? now(),
+      createdAt,
       inputTokens: seed.usage?.input ?? null,
       outputTokens: seed.usage?.output ?? null,
       cacheReadTokens: seed.usage?.cacheRead ?? null,
@@ -124,6 +129,24 @@ export function seedSessionEntry(
       body: JSON.stringify(body),
     })
     .run()
+  applyRollupDelta(db, {
+    sessionId: seed.sessionId,
+    agentId: seed.agentId,
+    toolName:
+      role === "toolResult" && message && typeof message.toolName === "string"
+        ? message.toolName
+        : null,
+    delta: rollupDeltaOf({
+      role,
+      inputTokens: seed.usage?.input ?? null,
+      outputTokens: seed.usage?.output ?? null,
+      cacheReadTokens: seed.usage?.cacheRead ?? null,
+      cacheWriteTokens: seed.usage?.cacheWrite ?? null,
+      reasoningTokens: seed.usage?.reasoning ?? null,
+      cost: seed.usage?.cost ?? null,
+    }),
+    at: createdAt,
+  })
 }
 
 /** Principal fixtures for service-level tests. `agentPrincipal()` matches the

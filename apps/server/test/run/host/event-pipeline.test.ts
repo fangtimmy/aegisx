@@ -34,6 +34,7 @@ function setup() {
   const pipeline = createAgentEventPipeline({
     channel: "run-1",
     agentId: "agent-1",
+    sessionId: "sess-1",
     bus,
   })
   return { pipeline, emitted }
@@ -66,6 +67,9 @@ describe("createAgentEventPipeline commitEntry", () => {
     const committed = committedOf(emitted)
     expect(committed.length).toBe(1)
     expect(committed[0].item.seq).toBe(1)
+    // The replay cursor's key: clients track lastSeq per session.
+    expect(committed[0].sessionId).toBe("sess-1")
+    expect(committed[0].agentId).toBe("agent-1")
     const entry = committed[0].item.entry
     expect(entry.type).toBe("message")
     if (entry.type !== "message") throw new Error("expected message entry")

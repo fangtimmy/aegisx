@@ -149,6 +149,7 @@ describe("parseLiveEvent", () => {
     const event = parseLiveEvent({
       type: "message.committed",
       agentId: "a1",
+      sessionId: "sess-1",
       item: {
         key: "msg:1",
         seq: 9,
@@ -158,8 +159,19 @@ describe("parseLiveEvent", () => {
     })
     expect(event).toMatchObject({
       type: "message.committed",
+      sessionId: "sess-1",
       item: { seq: 9, key: "msg:1", meta: { durationMs: 12 } },
     })
+  })
+
+  test("message.committed without a sessionId is rejected (the replay cursor key)", () => {
+    expect(
+      parseLiveEvent({
+        type: "message.committed",
+        agentId: "a1",
+        item: { key: "msg:1", seq: 9, entry: validMessageEntry() },
+      })
+    ).toBeUndefined()
   })
 
   test("unknown types and non-objects are rejected", () => {

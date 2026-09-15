@@ -8,7 +8,6 @@ import {
   challengeFlags,
   challengeRemote,
   challenges,
-  sessionEntries,
 } from "../db/schema"
 import { isTargetCapable } from "../platforms/challenge-state"
 import { collapseToAttempts, toFlagPublic } from "../platforms/wire"
@@ -17,7 +16,7 @@ import { type ChallengeMeta, toAgentSummary } from "./public"
 
 export type AgentQueries = ReturnType<typeof createAgentQueries>
 
-export function createAgentQueries(options: { db: Database }) {
+export function createAgentQueries(options: { db: Database; dataDir: string }) {
   const { db } = options
 
   function getAgentRow(agentId: string) {
@@ -152,9 +151,10 @@ export function createAgentQueries(options: { db: Database }) {
       .map(toFlagPublic)
   }
 
-  /** Sum token usage + cost across an agent from session_entries. */
+  /** Sum token usage + cost across an agent, off the usage_rollups
+   * projection (the entry-write transaction maintains them). */
   function usageOfAgent(agentId: string): AgentUsage | undefined {
-    return sumUsageTotals(db, eq(sessionEntries.agentId, agentId))
+    return sumUsageTotals(db, [agentId])
   }
 
   /** Event-wide token usage + cost across every agent of the event
@@ -167,12 +167,13 @@ export function createAgentQueries(options: { db: Database }) {
       .all()
       .map((row) => row.id)
     if (ids.length === 0) return undefined
-    return sumUsageTotals(db, inArray(sessionEntries.agentId, ids))
+    return sumUsageTotals(db, ids)
   }
 
   /** Durable committed entries for one agent's ACTIVE session, paginated by
    * per-session seq (also the backtrack API's target key). `nextAfter` is
-   * opaque to callers — echo it back as `after`. */
+   * opaque to callers — echo it back as `after`. Reads the merged
+   * archive+database rows, so archived history is served transparently. */
   function listMessages(
     agentId: string,
     opts: { after?: number; sessionId?: string } = {}
@@ -184,15 +185,13 @@ export function createAgentQueries(options: { db: Database }) {
       .where(eq(agents.id, agentId))
       .get()
     const sessionId = opts.sessionId ?? agent?.sessionFile ?? undefined
-    if (!sessionId) return { items: [], nextAfter: after }
-    return listRenderableEntries(
-      db,
-      and(
-        eq(sessionEntries.agentId, agentId),
-        eq(sessionEntries.sessionId, sessionId)
-      ),
-      { after }
-    )
+    if (!sessionId) return { items: [], nextAfter: after, sessionHeadSeq: 0 }
+    return listRenderableEntries(db, {
+      agentId,
+      sessionId,
+      dataDir: options.dataDir,
+      after,
+    })
   }
 
   return {

@@ -112,6 +112,10 @@ export type LiveEvent =
   | {
       type: "message.committed"
       agentId: string
+      /** The session the entry landed in — clients key their lastSeq cursor
+       * by it (seq is session-scoped; multi-session agents must not share a
+       * cursor). */
+      sessionId: string
       item: EntryItem
     }
   | {

@@ -86,6 +86,9 @@ export type AgentHostInput = {
   execEnv?: () => string[]
   /** Fired after a commit that may change usage (compaction / branch_summary). */
   onUsageMaybeChanged?: () => void
+  /** Data dir root — the session archive's home (transparent merged reads
+   * on resume). */
+  dataDir: string
   db: Database
   bus: LiveBus
 }
@@ -135,6 +138,7 @@ export async function createAgentHost(
     ...(input.onUsageMaybeChanged
       ? { onUsageMaybeChanged: input.onUsageMaybeChanged }
       : {}),
+    dataDir: input.dataDir,
     db: input.db,
     bus: input.bus,
   })

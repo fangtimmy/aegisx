@@ -6,64 +6,60 @@ import {
   type SessionEntryView,
   type TimingMeta,
 } from "@aegisx/shared"
-import { and, asc, desc, gt, inArray, sql, type SQL } from "drizzle-orm"
+import { inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../../db"
-import { sessionEntries } from "../../db/schema"
+import { usageRollups } from "../../db/schema"
 import { type EntryUsageTotals } from "./entry-usage"
 import { entryKeyOf } from "./event-pipeline"
+import { loadMergedEntryRows, sessionHeadSeq } from "./session-archive"
 import { entryViewFromRow } from "./session-entry-codec"
 
 /** Only renderable session-entry kinds are surfaced to message lists. */
-const RENDERABLE_TYPES = [
+const RENDERABLE_TYPES = new Set([
   "message",
   "compaction",
   "branch_summary",
   "model_change",
   "thinking_level_change",
-] as const
+])
 
-/** One aggregate SQL pass over session_entries matching `where`: token/cost
- * sums straight off the first-class usage columns (the SQL twin of
- * {@link accumulateEntryUsage} — the JS fold stays for live sampling; both
- * are same-sourced from what the adapter writes). `turns` counts assistant
- * message rows (pi getSessionStats counts every assistant message, usage or
- * not). `cacheHitRate` mirrors the fold's rule: the LATEST assistant row with
- * prompt tokens (input + cacheRead + cacheWrite > 0) wins. */
-export function usageTotalsSql(
+/** Usage totals across the named agents' sessions, read straight off the
+ * usage_rollups projection (D 批 — the aggregate used to be one SQL pass
+ * over session_entries; the rollup is maintained by the entry-write
+ * transaction, so this is one small indexed table instead of the largest
+ * table in the database). `totalTokens` follows pi's getSessionStats formula
+ * (input + output + cacheRead + cacheWrite), NOT the provider-reported
+ * totalTokens field. */
+export function agentUsageTotals(
   db: Database,
-  where: SQL | undefined
-): EntryUsageTotals & { turns: number; cacheHitRate: number | null } {
-  const scope = where ? sql`${where} AND ` : sql``
+  agentIds: string[]
+): EntryUsageTotals & { turns: number } {
+  const zero = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    cost: 0,
+    turns: 0,
+    totalTokens: 0,
+  }
+  if (agentIds.length === 0) return zero
   const row = db
     .select({
-      input: sql<number>`COALESCE(SUM(${sessionEntries.inputTokens}), 0)`,
-      output: sql<number>`COALESCE(SUM(${sessionEntries.outputTokens}), 0)`,
-      cacheRead: sql<number>`COALESCE(SUM(${sessionEntries.cacheReadTokens}), 0)`,
-      cacheWrite: sql<number>`COALESCE(SUM(${sessionEntries.cacheWriteTokens}), 0)`,
-      reasoning: sql<number>`COALESCE(SUM(${sessionEntries.reasoningTokens}), 0)`,
-      cost: sql<number>`COALESCE(SUM(${sessionEntries.cost}), 0)`,
-      turns: sql<number>`SUM(CASE WHEN ${sessionEntries.role} = 'assistant' THEN 1 ELSE 0 END)`,
-      // "Latest" is per-session (seq restarts per session) — only well-defined
-      // when `where` scopes to a single session. No production consumer today
-      // (sumUsageTotals drops it; the live strip uses the JS fold).
-      cacheHitRate: sql<number | null>`(
-        SELECT ${sessionEntries.cacheReadTokens} * 100.0 /
-          (${sessionEntries.inputTokens} + ${sessionEntries.cacheReadTokens} + ${sessionEntries.cacheWriteTokens})
-        FROM ${sessionEntries}
-        WHERE ${scope}${sessionEntries.role} = 'assistant'
-          AND ${sessionEntries.inputTokens} + ${sessionEntries.cacheReadTokens} + ${sessionEntries.cacheWriteTokens} > 0
-        ORDER BY ${sessionEntries.seq} DESC
-        LIMIT 1
-      )`,
+      input: sql<number>`COALESCE(SUM(${usageRollups.inputTokens}), 0)`,
+      output: sql<number>`COALESCE(SUM(${usageRollups.outputTokens}), 0)`,
+      cacheRead: sql<number>`COALESCE(SUM(${usageRollups.cacheReadTokens}), 0)`,
+      cacheWrite: sql<number>`COALESCE(SUM(${usageRollups.cacheWriteTokens}), 0)`,
+      reasoning: sql<number>`COALESCE(SUM(${usageRollups.reasoningTokens}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${usageRollups.cost}), 0)`,
+      turns: sql<number>`COALESCE(SUM(${usageRollups.turns}), 0)`,
     })
-    .from(sessionEntries)
-    .where(where)
+    .from(usageRollups)
+    .where(inArray(usageRollups.agentId, agentIds))
     .get()
-  const totals: EntryUsageTotals & {
-    turns: number
-    cacheHitRate: number | null
-  } = {
+  const totals: EntryUsageTotals & { turns: number } = {
     input: row?.input ?? 0,
     output: row?.output ?? 0,
     cacheRead: row?.cacheRead ?? 0,
@@ -71,7 +67,6 @@ export function usageTotalsSql(
     reasoning: row?.reasoning ?? 0,
     cost: row?.cost ?? 0,
     turns: row?.turns ?? 0,
-    cacheHitRate: row?.cacheHitRate ?? null,
     // pi getSessionStats total — NOT the provider-reported totalTokens field.
     totalTokens: 0,
   }
@@ -80,15 +75,13 @@ export function usageTotalsSql(
   return totals
 }
 
-/** Sum token usage + cost across entries matching `where`. Returns undefined
- * when nothing was used (so callers can omit the field). Single aggregate SQL
- * query over the usage columns — usageTotals sits on hot paths (each turn
- * start/settle, flag, compaction). */
+/** Sum token usage + cost across the named agents' sessions. Returns
+ * undefined when nothing was used (so callers can omit the field). */
 export function sumUsageTotals(
   db: Database,
-  where: SQL | undefined
+  agentIds: string[]
 ): AgentUsage | undefined {
-  const totals = usageTotalsSql(db, where)
+  const totals = agentUsageTotals(db, agentIds)
   if (totals.turns === 0 && totals.cost === 0 && totals.totalTokens === 0) {
     return undefined
   }
@@ -104,48 +97,33 @@ export function sumUsageTotals(
   }
 }
 
-/** List renderable entries after the given seq cursor, matching `scopeWhere`.
- * `scopeWhere` is the scoping condition WITHOUT the cursor filter (this adds
- * it). Every row carries its agent_id (v8: notNull).
- *
- * The cursor is the per-session append position (`unique(sessionId, seq)`);
- * `nextAfter` echoes the highest seq above the cursor — renderable or not —
- * so a session whose tail is non-renderable rows (label / session_info) does
- * not pin clients into re-pulling them forever. */
+/** List renderable entries after the given seq cursor for one agent's
+ * session (the cursor is also the backtrack API's target key). Reads the
+ * transparent merged entry rows (archive prefix + database rows), so
+ * archived history pages exactly like live rows. `nextAfter` echoes the
+ * highest seq above the cursor — renderable or not — so a session whose
+ * tail is non-renderable rows (label / session_info) does not pin clients
+ * into re-pulling them forever. `sessionHeadSeq` is the session's TRUE head
+ * (merged max seq) even when it sits below the request cursor — the client's
+ * server-side-truncation probe (a backtrack elsewhere rewound the seq space;
+ * `nextAfter` alone can never express that). */
 export function listRenderableEntries(
   db: Database,
-  scopeWhere: SQL | undefined,
-  opts: { after: number }
+  opts: {
+    agentId: string
+    sessionId: string
+    dataDir: string
+    after: number
+  }
 ): MessageList {
-  const rows = db
-    .select({
-      id: sessionEntries.id,
-      parentId: sessionEntries.parentId,
-      createdAt: sessionEntries.createdAt,
-      body: sessionEntries.body,
-      meta: sessionEntries.meta,
-      seq: sessionEntries.seq,
-      agentId: sessionEntries.agentId,
-    })
-    .from(sessionEntries)
-    .where(
-      and(
-        scopeWhere,
-        gt(sessionEntries.seq, opts.after),
-        inArray(sessionEntries.type, [...RENDERABLE_TYPES])
-      )
-    )
-    .orderBy(asc(sessionEntries.seq))
-    .all()
-  const tail = db
-    .select({ seq: sessionEntries.seq })
-    .from(sessionEntries)
-    .where(and(scopeWhere, gt(sessionEntries.seq, opts.after)))
-    .orderBy(desc(sessionEntries.seq))
-    .limit(1)
-    .get()
+  const rows = loadMergedEntryRows(db, opts.dataDir, opts.sessionId, {
+    after: opts.after,
+  })
   const items: MessageListItem[] = []
+  let nextAfter = opts.after
   for (const row of rows) {
+    if (row.seq > nextAfter) nextAfter = row.seq
+    if (!RENDERABLE_TYPES.has(row.type)) continue
     let entry: SessionEntryView
     try {
       // Written by the adapter (typed at commit time); parse only guards
@@ -166,9 +144,13 @@ export function listRenderableEntries(
     items.push({
       entry,
       seq: row.seq,
-      key: entryKeyOf(row.agentId, entry),
+      key: entryKeyOf(opts.agentId, entry),
       ...(meta ? { meta } : {}),
     })
   }
-  return { items, nextAfter: tail?.seq ?? opts.after }
+  return {
+    items,
+    nextAfter,
+    sessionHeadSeq: sessionHeadSeq(db, opts.dataDir, opts.sessionId),
+  }
 }

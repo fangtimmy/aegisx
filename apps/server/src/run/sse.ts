@@ -107,7 +107,15 @@ function pumpLiveStream(
           if (aborted) break
         }
         for (const event of coalescer.drain()) {
-          await stream.writeSSE({ data: JSON.stringify(event) })
+          await stream.writeSSE({
+            data: JSON.stringify(event),
+            // The durable faces' replay cursor: EventSource echoes it back
+            // as Last-Event-ID on reconnect. Only channel frames carry one
+            // (the ledger row id — the global monotonic the replay reads).
+            ...(event.type === "channel.message"
+              ? { id: String(event.message.id) }
+              : {}),
+          })
         }
         if (aborted) break
       }
@@ -148,11 +156,18 @@ function assertMayWatchLive(principal: Principal): void {
  * keeps it keyed by agentId and only renders what is on screen. There is no
  * `ready` frame any more: the EventSource's own `open` event is the readiness
  * signal, and a global ready had no id to carry. Channel timelines need no
- * snapshot: their REST window + polling is the durable source, live frames
- * are the accelerator.
+ * snapshot beyond the replay below: their REST window + polling is the
+ * durable source, live frames are the accelerator.
  *
- * Reconnect does not replay durable messages: the client re-reads them via
- * GET .../messages and de-duplicates by message id.
+ * Channel-face resume: every channel frame is stamped with the ledger row id
+ * (`id:`), so a reconnecting EventSource presents Last-Event-ID and the seed
+ * replays every ledger row past that cursor — subscribe-first still holds
+ * (rows landing between replay and subscribe arrive live and are de-duplicated
+ * client-side by message id). The session-entry face has no SSE replay:
+ * committed frames carry `(sessionId, seq)` and the client catches up via
+ * GET .../messages?after=<lastSeq> before resuming the live stream. Volatile
+ * faces (tool deltas / context / activity) stay seed-before-subscribe
+ * snapshots — their replay would be meaningless.
  */
 export function streamLive(
   c: Context,
@@ -162,10 +177,21 @@ export function streamLive(
   assertMayWatchLive(principal)
   const bus = service.bus
 
+  // The reconnect cursor (EventSource resends it automatically). A global
+  // autoincrement ids every ledger row, so one cursor covers all channels.
+  const lastEventId = Number.parseInt(c.req.header("last-event-id") ?? "", 10)
+  const replayAfter =
+    Number.isSafeInteger(lastEventId) && lastEventId > 0 ? lastEventId : null
+
   return pumpLiveStream(
     c,
     (listener) => bus.subscribeAll(listener),
     (push) => {
+      if (replayAfter !== null) {
+        for (const message of service.channels.replayAfter(replayAfter)) {
+          push({ type: "channel.message", message })
+        }
+      }
       // Fresh snapshot (re-read after subscribe, not before).
       for (const agent of service.listAgents()) {
         push({ type: "agent.updated", agent })

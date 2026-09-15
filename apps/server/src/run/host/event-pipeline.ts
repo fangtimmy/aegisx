@@ -191,6 +191,9 @@ export type AgentEventPipeline = ReturnType<typeof createAgentEventPipeline>
 export function createAgentEventPipeline(options: {
   channel: string
   agentId: string
+  /** The pipeline's own session id — `message.committed` carries it so
+   * clients can key their per-session replay cursors. */
+  sessionId: string
   bus: LiveBus
   /** Live context snapshot for the conversation stat strip. */
   sampleContext?: () => ContextSnapshot | null
@@ -198,7 +201,7 @@ export function createAgentEventPipeline(options: {
    * branch_summary), so the service can recompute + re-emit the run snapshot. */
   onUsageMaybeChanged?: () => void
 }) {
-  const { channel, agentId, bus } = options
+  const { channel, agentId, sessionId, bus } = options
   let revision = 0
   const nextRevision = () => (revision += 1)
 
@@ -318,6 +321,7 @@ export function createAgentEventPipeline(options: {
     bus.emit(channel, {
       type: "message.committed",
       agentId,
+      sessionId,
       item: {
         entry,
         seq,

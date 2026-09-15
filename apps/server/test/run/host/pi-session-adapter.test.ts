@@ -59,6 +59,7 @@ function setup() {
   sqlite.run("PRAGMA foreign_keys = OFF")
   return {
     db,
+    dataDir: dir,
     close: () => {
       sqlite.close()
       releaseLock()
@@ -162,7 +163,7 @@ describe("PiSessionAdapter", () => {
   })
 
   test("REPLAY PARITY: reopen bulk-loads and reproduces the in-memory session", () => {
-    const { db, close } = setup()
+    const { db, dataDir, close } = setup()
     try {
       const sm = PiSessionAdapter.create({ cwd: "/ws", agentId: "a1", db })
       exerciseAllKinds(sm)
@@ -171,6 +172,7 @@ describe("PiSessionAdapter", () => {
       const reopened = PiSessionAdapter.open(sm.getSessionId(), {
         agentId: "a1",
         db,
+        dataDir,
       })
       expect(snapshot(reopened)).toEqual(snapshot(sm))
 
@@ -216,7 +218,7 @@ describe("PiSessionAdapter", () => {
   })
 
   test("compaction persisted on write drives the same context rebuild after reopen", () => {
-    const { db, close } = setup()
+    const { db, dataDir, close } = setup()
     try {
       const sm = PiSessionAdapter.create({ cwd: "/ws", agentId: "a1", db })
       for (const m of [
@@ -233,6 +235,7 @@ describe("PiSessionAdapter", () => {
       const reopened = PiSessionAdapter.open(sm.getSessionId(), {
         agentId: "a1",
         db,
+        dataDir,
       })
       expect(reopened.buildContextEntries().map((e) => e.type)).toEqual(
         sm.buildContextEntries().map((e) => e.type)
@@ -260,7 +263,7 @@ describe("PiSessionAdapter", () => {
   })
 
   test("branch position survives reopen (the persisted active leaf)", () => {
-    const { db, close } = setup()
+    const { db, dataDir, close } = setup()
     try {
       const sm = PiSessionAdapter.create({ cwd: "/ws", agentId: "a1", db })
       const firstId = sm.appendMessage(userMsg("a"))
@@ -274,6 +277,7 @@ describe("PiSessionAdapter", () => {
       const reopened = PiSessionAdapter.open(sm.getSessionId(), {
         agentId: "a1",
         db,
+        dataDir,
       })
       expect(reopened.getLeafId()).toBe(firstId)
       const branchId = reopened.appendMessage(userMsg("branch"))
@@ -292,7 +296,7 @@ describe("PiSessionAdapter", () => {
   })
 
   test("resetLeaf persists (reopened leaf stays before the first entry)", () => {
-    const { db, close } = setup()
+    const { db, dataDir, close } = setup()
     try {
       const sm = PiSessionAdapter.create({ cwd: "/ws", agentId: "a1", db })
       sm.appendMessage(userMsg("a"))
@@ -302,6 +306,7 @@ describe("PiSessionAdapter", () => {
       const reopened = PiSessionAdapter.open(sm.getSessionId(), {
         agentId: "a1",
         db,
+        dataDir,
       })
       expect(reopened.getLeafId()).toBeNull()
     } finally {
@@ -310,7 +315,7 @@ describe("PiSessionAdapter", () => {
   })
 
   test("backtrack: physical tail delete reopens at the last surviving row", () => {
-    const { db, close } = setup()
+    const { db, dataDir, close } = setup()
     try {
       const sm = PiSessionAdapter.create({ cwd: "/ws", agentId: "a1", db })
       sm.appendMessage(userMsg("a"))
@@ -332,6 +337,7 @@ describe("PiSessionAdapter", () => {
       const reopened = PiSessionAdapter.open(sm.getSessionId(), {
         agentId: "a1",
         db,
+        dataDir,
       })
       // The stored pointer was deleted with the tail; the leaf falls back to
       // the last surviving row and the column is normalized to match.
@@ -366,14 +372,14 @@ describe("PiSessionAdapter", () => {
   })
 
   test("open rejects a missing session and a session owned by another agent", () => {
-    const { db, close } = setup()
+    const { db, dataDir, close } = setup()
     try {
       const sm = PiSessionAdapter.create({ cwd: "/ws", agentId: "a1", db })
       expect(() =>
-        PiSessionAdapter.open("nope", { agentId: "a1", db })
+        PiSessionAdapter.open("nope", { agentId: "a1", db, dataDir })
       ).toThrow("PiSessionAdapter: session nope not found")
       expect(() =>
-        PiSessionAdapter.open(sm.getSessionId(), { agentId: "a2", db })
+        PiSessionAdapter.open(sm.getSessionId(), { agentId: "a2", db, dataDir })
       ).toThrow(
         `PiSessionAdapter: session ${sm.getSessionId()} belongs to agent a1, not a2`
       )

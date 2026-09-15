@@ -107,11 +107,20 @@ export class ConversationStore {
    * agent's frames arrive, so without this the browser would accumulate the
    * whole fleet's history. */
   private retained = new Set<string>()
-  /** Generation per agent, bumped by reset(). Async reloads capture it up
-   * front and applySnapshot rejects responses from older generations. */
+  /** Generation per agent, bumped by reset()/retain-eviction. Async reloads
+   * capture it up front and applySnapshot rejects responses from older
+   * generations — the request/response guard for server-side truncations
+   * (session switch / backtrack): an in-flight listMessages response landing
+   * after a reset must not merge deleted rows back in. */
   private readonly epochs = new Map<string, number>()
-  /** Epoch of the last applied snapshot per agent. */
-  private readonly snapshotEpochs = new Map<string, number>()
+  /** Per-session lastSeq cursor (seq is session-scoped — multi-session
+   * agents must not share one), fed by message.committed frames. The merge
+   * rule for the durable face is total: drop anything with seq ≤ lastSeq,
+   * which makes snapshot-vs-live ordering races impossible by construction.
+   * `activeSession` tracks which session the agent is currently committing
+   * to (the cursor the next catch-up reads). */
+  private readonly lastSeqBySession = new Map<string, Map<string, number>>()
+  private readonly activeSession = new Map<string, string>()
 
   constructor() {
     // Queued notifications drain on rAF, which hidden tabs suspend; the
@@ -156,6 +165,14 @@ export class ConversationStore {
     return this.epochs.get(agentId) ?? 0
   }
 
+  /** The active session's lastSeq — the `after` cursor for the next
+   * incremental catch-up (0 when nothing has been seen: full pull). */
+  cursorOf(agentId: string) {
+    const sessionId = this.activeSession.get(agentId)
+    if (sessionId === undefined) return 0
+    return this.lastSeqBySession.get(agentId)?.get(sessionId) ?? 0
+  }
+
   getAgents() {
     return [...this.agents.values()]
   }
@@ -192,10 +209,11 @@ export class ConversationStore {
     return { toolName: latest.toolName, args: latest.args }
   }
 
-  /** Drop ALL committed + live state for one agent (session switch / flat
-   * backtrack). The caller re-fetches committed messages afterwards — the
-   * committed map is otherwise append-only (applySnapshot never removes keys),
-   * so a truncated session would keep its deleted tail without this. */
+  /** Drop ALL state for one agent (session switch / flat backtrack / a
+   * detected server-side truncation). The caller re-fetches committed
+   * messages from scratch afterwards — the cursor state is cleared with the
+   * maps, so the reload is a full pull and the next append after a
+   * backtrack (which reuses seqs) merges normally. */
   reset(agentId: string) {
     this.epochs.set(agentId, (this.epochs.get(agentId) ?? 0) + 1)
     this.messages.delete(agentId)
@@ -207,6 +225,8 @@ export class ConversationStore {
     this.context.delete(agentId)
     this.views.delete(agentId)
     this.snapshots.delete(agentId)
+    this.lastSeqBySession.delete(agentId)
+    this.activeSession.delete(agentId)
     this.notify(agentId)
   }
 
@@ -294,23 +314,58 @@ export class ConversationStore {
     this.notify(agentId)
   }
 
-  applySnapshot(agentId: string, items: EntryItem[], epoch?: number) {
-    // Callers mid-reload pass the generation captured before their fetch so a
-    // stale response cannot merge truncated rows back in; without one the
-    // snapshot is treated as current.
+  /**
+   * Apply a REST snapshot of the agent's committed history.
+   *
+   * Callers mid-reload pass the generation captured before their fetch so a
+   * stale response (an older reload landing after a newer reset) cannot merge
+   * truncated rows back in; without one the snapshot is treated as current.
+   * `after` is the cursor the request was made with: a FULL-PULL response
+   * (after === 0) is the authoritative read of the active session and
+   * REPLACES the stored messages and that session's cursor instead of
+   * merging — a stale `message.committed` frame that landed in a reset
+   * window must not poison the cursor (its ghost seq would make the merge
+   * drop this very snapshot's surviving rows, leaving a ghost-only view).
+   * Incremental snapshots keep the seq-ordered merge.
+   */
+  applySnapshot(
+    agentId: string,
+    items: EntryItem[],
+    epoch?: number,
+    after?: number
+  ) {
     const current = this.epochOf(agentId)
     if (epoch !== undefined && epoch !== current) return
-    const stored = this.messages.get(agentId) ?? new Map()
+    const fullPull = after === 0
+    const cursor = this.cursorOf(agentId)
+    const stored = fullPull
+      ? new Map<string, EntryItem>()
+      : (this.messages.get(agentId) ?? new Map())
     const committedKeys = new Set<string>()
-    const completedTools = this.completedTools.get(agentId) ?? new Set<string>()
+    const completedTools = fullPull
+      ? new Set<string>()
+      : (this.completedTools.get(agentId) ?? new Set<string>())
+    let head = 0
     for (const item of items) {
+      if (!fullPull && item.seq <= cursor) continue
       stored.set(item.key, item)
       committedKeys.add(item.key)
+      if (item.seq > head) head = item.seq
       const toolCallId = toolCallIdOf(item.entry)
       if (toolCallId) completedTools.add(toolCallId)
     }
+    if (fullPull) {
+      const sessionId = this.activeSession.get(agentId)
+      if (sessionId !== undefined) {
+        const sessions =
+          this.lastSeqBySession.get(agentId) ?? new Map<string, number>()
+        if (head === 0) sessions.delete(sessionId)
+        else sessions.set(sessionId, head)
+        this.lastSeqBySession.set(agentId, sessions)
+      }
+      this.completedTools.set(agentId, completedTools)
+    }
     this.messages.set(agentId, stored)
-    this.completedTools.set(agentId, completedTools)
     const progress = this.messageProgress.get(agentId)
     if (progress) {
       for (const key of committedKeys) progress.delete(key)
@@ -320,7 +375,6 @@ export class ConversationStore {
       for (const toolCallId of completedTools) tools.delete(toolCallId)
     }
     this.rebuildCommitted(agentId)
-    this.snapshotEpochs.set(agentId, current)
   }
 
   applyEvent(event: LiveEvent) {
@@ -332,16 +386,14 @@ export class ConversationStore {
       return
     }
     if (event.type === "message.committed") {
-      // A commit predating an APPLIED snapshot of an OLDER generation belongs
-      // to the pre-reset world (the committed map was truncated server-side)
-      // and would ghost as a row no later snapshot contains — drop it. Commits
-      // arriving before the FIRST snapshot belong to the current generation
-      // and must be kept; reset() leaves the stale snapshotEpochs entry in
-      // place, so the reset-window guard still fires after it.
-      const applied = this.snapshotEpochs.get(event.agentId)
-      if (applied !== undefined && applied !== this.epochOf(event.agentId)) {
-        return
-      }
+      // The durable face is seq-ordered: anything at or below the session's
+      // cursor was already merged (a replayed or duplicated frame) — drop it.
+      const sessions = this.lastSeqBySession.get(event.agentId) ?? new Map()
+      const cursor = sessions.get(event.sessionId) ?? 0
+      if (event.item.seq <= cursor) return
+      sessions.set(event.sessionId, event.item.seq)
+      this.lastSeqBySession.set(event.agentId, sessions)
+      this.activeSession.set(event.agentId, event.sessionId)
       const stored = this.messages.get(event.agentId) ?? new Map()
       stored.set(event.item.key, event.item)
       this.messages.set(event.agentId, stored)
@@ -485,8 +537,9 @@ export class ConversationStore {
    * Declare which agents' durable history stays materialized. The UI passes
    * the agent(s) it renders; evicted agents keep their bounded state (context
    * / queue / activity / tools) so switching back shows the live picture
-   * without a per-agent reconnect, and their epoch is bumped so an in-flight
-   * reload cannot merge truncated rows back in.
+   * without a per-agent reconnect. Eviction also drops the seq cursors and
+   * bumps the epoch: re-selecting the agent re-reads history from scratch
+   * (the server may have truncated or switched sessions meanwhile).
    */
   retain(agentIds: Iterable<string>) {
     this.retained = new Set(agentIds)
@@ -507,6 +560,8 @@ export class ConversationStore {
       this.views.delete(agentId)
       this.snapshots.delete(agentId)
       this.completedTools.delete(agentId)
+      this.lastSeqBySession.delete(agentId)
+      this.activeSession.delete(agentId)
       this.epochs.set(agentId, this.epochOf(agentId) + 1)
       this.notify(agentId)
     }

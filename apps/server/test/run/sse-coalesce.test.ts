@@ -34,6 +34,7 @@ function committed(seq: number): LiveEvent {
   return refine<LiveEvent>({
     type: "message.committed",
     agentId: "agent-1",
+    sessionId: "sess-1",
     item: { seq },
   })
 }

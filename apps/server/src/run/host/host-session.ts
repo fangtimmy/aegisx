@@ -79,6 +79,9 @@ export type CreateHostAgentSessionInput = {
   /** Fired after a commit that may change usage (compaction / branch_summary),
    * so the service can recompute + re-emit its snapshot. */
   onUsageMaybeChanged?: () => void
+  /** Data dir root — the session archive's home (transparent merged reads
+   * on resume). */
+  dataDir: string
   db: Database
   bus: LiveBus
 }
@@ -150,6 +153,7 @@ export async function createHostAgentSession(
     ? PiSessionAdapter.open(resume.sessionId, {
         ...ownerManagerOpts(owner),
         db,
+        dataDir: input.dataDir,
       })
     : PiSessionAdapter.create({ ...ownerManagerOpts(owner), cwd, db })
   const settingsManager = SettingsManager.inMemory({
@@ -173,6 +177,7 @@ export async function createHostAgentSession(
   const pipeline = createAgentEventPipeline({
     channel,
     agentId,
+    sessionId: sessionManager.getSessionId(),
     bus,
     sampleContext,
     onUsageMaybeChanged: input.onUsageMaybeChanged,

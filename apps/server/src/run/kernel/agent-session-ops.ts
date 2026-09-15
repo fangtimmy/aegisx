@@ -1,19 +1,23 @@
 import type { AgentSessionSummary, AgentSummary } from "@aegisx/shared"
-import { and, asc, count, eq, gt, inArray } from "drizzle-orm"
+import { and, asc, eq, gt, inArray } from "drizzle-orm"
 
 import type { Database } from "../../db"
-import { agents, sessionEntries, sessions } from "../../db/schema"
+import { agents, sessionEntries, sessions, usageRollups } from "../../db/schema"
 import type { DomainEventActor } from "../domain-events/store"
 import { emitDomainEvent } from "../domain-events/store"
 import { RunActionError } from "../errors"
 import type { HostAgentSession } from "../host/host-session"
+import { loadMergedEntryRows } from "../host/session-archive"
+import { recomputeSessionRollups } from "../host/usage-rollups"
 
-/** Dependencies the kernel injects — the ops share its db, per-agent
- * locks, the agents' mounted sessions, and call back into prepareAgent /
- * resumeAgent / the bus emit. Scope assertions are the composition
- * facade's business; the ops take the already-resolved event actor. */
+/** Dependencies the kernel injects — the ops share its db, data dir (the
+ * session archive's merged reads), per-agent locks, the agents' mounted
+ * sessions, and call back into prepareAgent / resumeAgent / the bus emit.
+ * Scope assertions are the composition facade's business; the ops take the
+ * already-resolved event actor. */
 export type AgentSessionOpsDeps = {
   db: Database
+  dataDir: string
   /** The agent's mounted live session, if any. */
   sessionOf(agentId: string): HostAgentSession | undefined
   /** Unmount the live session (the caller disposes it). */
@@ -108,7 +112,9 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
   }
 
   /** List an agent's sessions (oldest first) with per-session message counts
-   * and the active flag (the current sessionFile pointer). */
+   * and the active flag (the current sessionFile pointer). Counts read the
+   * usage_rollups entryCount (the projection every consumer shares) — not a
+   * session_entries scan, and exact for archived sessions too. */
   function listSessions(agentId: string): AgentSessionSummary[] {
     const rows = db
       .select()
@@ -119,17 +125,19 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
     const counts = new Map<string, number>()
     if (rows.length > 0) {
       for (const entry of db
-        .select({ sessionId: sessionEntries.sessionId, count: count() })
-        .from(sessionEntries)
+        .select({
+          sessionId: usageRollups.sessionId,
+          entryCount: usageRollups.entryCount,
+        })
+        .from(usageRollups)
         .where(
           inArray(
-            sessionEntries.sessionId,
+            usageRollups.sessionId,
             rows.map((r) => r.id)
           )
         )
-        .groupBy(sessionEntries.sessionId)
         .all()) {
-        counts.set(entry.sessionId, entry.count)
+        counts.set(entry.sessionId, entry.entryCount)
       }
     }
     const active = db
@@ -212,10 +220,13 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
   /** Flat backtrack: delete every committed entry after `seq` in the agent's
    * active session (the target entry itself is kept). pi's tree-branching
    * semantics are intentionally NOT used — the abandoned tail is physically
-   * removed, so the next turn continues from the truncated history. The live
-   * session is rebuilt so pi re-derives its in-memory context (pi caches
-   * `agent.state.messages` at session creation; a bare DB delete would not
-   * take effect). Requires an idle agent. */
+   * removed, so the next turn continues from the truncated history. The target
+   * is resolved on the merged timeline (archive prefix + database rows) — the
+   * same rows the message list renders — so an entry that only exists in the
+   * archive is still a legal backtrack target. The live session is rebuilt so
+   * pi re-derives its in-memory context (pi caches `agent.state.messages` at
+   * session creation; a bare DB delete would not take effect). Requires an
+   * idle agent. */
   async function backtrack(
     agentId: string,
     seq: number
@@ -231,28 +242,30 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         throw new RunActionError("invalid_state", "Agent has no session")
       }
       const sessionId = agentRow.sessionFile
-      const target = db
-        .select({ id: sessionEntries.id })
-        .from(sessionEntries)
-        .where(
-          and(
-            eq(sessionEntries.sessionId, sessionId),
-            eq(sessionEntries.seq, seq)
-          )
-        )
-        .get()
+      const target = loadMergedEntryRows(db, deps.dataDir, sessionId).some(
+        (row) => row.seq === seq
+      )
       if (!target) {
         throw new RunActionError("not_found", "Target message not found")
       }
       await disposeLiveAgent(agentId)
-      db.delete(sessionEntries)
-        .where(
-          and(
-            eq(sessionEntries.sessionId, sessionId),
-            gt(sessionEntries.seq, seq)
+      // The tail delete and the rollup recompute land in ONE transaction:
+      // physical removal would leave the incrementally-maintained projections
+      // permanently inflated. Recompute-from-source (the merged read, bounded
+      // by the session's logical row count) instead of tail-decrementing —
+      // backtracks are low-frequency and it cannot drift; reading the archive
+      // prefix keeps a partially-archived session's rollups exact.
+      db.transaction((tx) => {
+        tx.delete(sessionEntries)
+          .where(
+            and(
+              eq(sessionEntries.sessionId, sessionId),
+              gt(sessionEntries.seq, seq)
+            )
           )
-        )
-        .run()
+          .run()
+        recomputeSessionRollups(tx, sessionId, deps.dataDir, deps.now())
+      })
       await deps.prepareAgent(agentId)
       deps.emitAgent(agentId)
       return deps.requireAgent(agentId)

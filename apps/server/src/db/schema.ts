@@ -20,7 +20,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 28
+export const SCHEMA_VERSION = 29
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -301,6 +301,69 @@ export const sessionEntries = sqliteTable(
     ),
     index("session_entries_agent_seq_idx").on(table.agentId, table.seq),
     index("session_entries_session_type_idx").on(table.sessionId, table.type),
+  ]
+)
+
+/**
+ * Session usage rollups (D 批): per-session materialized usage, maintained
+ * incrementally by the session-entry write path inside the same transaction
+ * as the entry INSERT (the adapter is the only writer; backtrack recomputes
+ * the session in the same transaction as its tail delete). Everyone else
+ * reads — the stats/digest/overview faces never scan session_entries.
+ * `entryCount` also backs listAgentSessions' messageCount, so archived
+ * sessions (rows moved to the archive file) keep reporting their full
+ * history. Rows cascade away with the session.
+ */
+export const usageRollups = sqliteTable(
+  "usage_rollups",
+  {
+    sessionId: text("session_id")
+      .primaryKey()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    /** Redundant owner anchor (accelerates per-agent aggregation; the
+     * session's owner is immutable). */
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    cost: real("cost").notNull().default(0),
+    /** Assistant message rows (pi getSessionStats counts every one). */
+    turns: integer("turns").notNull().default(0),
+    /** toolResult rows (EventStats per-agent toolCalls). */
+    toolCalls: integer("tool_calls").notNull().default(0),
+    /** All rows ever appended (incl. archived ones; listSessions badge). */
+    entryCount: integer("entry_count").notNull().default(0),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [index("usage_rollups_agent_id_idx").on(table.agentId)]
+)
+
+/**
+ * Session × tool rollups (D 批): per-session toolResult counts, maintained by
+ * the same write path; EventStats' toolUsage reads these joined through the
+ * redundant agent anchor (no session_entries scan).
+ */
+export const usageToolRollups = sqliteTable(
+  "usage_tool_rollups",
+  {
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    toolName: text("tool_name").notNull(),
+    /** Redundant owner anchor (accelerates per-event aggregation; the
+     * session's owner is immutable). */
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    calls: integer("calls").notNull().default(0),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sessionId, table.toolName] }),
+    index("usage_tool_rollups_agent_id_idx").on(table.agentId),
   ]
 )
 

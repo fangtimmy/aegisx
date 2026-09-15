@@ -2,7 +2,7 @@ import type { AgentStatus } from "./agent"
 
 /** Per-event statistics (GET /api/events/:eventId/stats). Everything is a
  * derived view over existing rows — agents / challenge_flags / spawn_queue /
- * channel_messages / session_entries — no dedicated storage. */
+ * channel_messages / the usage_rollups projections — no dedicated storage. */
 
 type EventStatsWindow = {
   /** Derived activity bounds: start = first agent start (fallback: first

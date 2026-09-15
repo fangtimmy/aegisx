@@ -286,4 +286,33 @@ CREATE TABLE `spawn_queue` (
 --> statement-breakpoint
 CREATE INDEX `spawn_queue_event_ord_idx` ON `spawn_queue` (`event_id`,`ord`);--> statement-breakpoint
 CREATE INDEX `spawn_queue_status_idx` ON `spawn_queue` (`status`);--> statement-breakpoint
-CREATE INDEX `spawn_queue_agent_id_idx` ON `spawn_queue` (`agent_id`);
+CREATE INDEX `spawn_queue_agent_id_idx` ON `spawn_queue` (`agent_id`);--> statement-breakpoint
+CREATE TABLE `usage_rollups` (
+	`session_id` text PRIMARY KEY NOT NULL,
+	`agent_id` text NOT NULL,
+	`input_tokens` integer DEFAULT 0 NOT NULL,
+	`output_tokens` integer DEFAULT 0 NOT NULL,
+	`cache_read_tokens` integer DEFAULT 0 NOT NULL,
+	`cache_write_tokens` integer DEFAULT 0 NOT NULL,
+	`reasoning_tokens` integer DEFAULT 0 NOT NULL,
+	`cost` real DEFAULT 0 NOT NULL,
+	`turns` integer DEFAULT 0 NOT NULL,
+	`tool_calls` integer DEFAULT 0 NOT NULL,
+	`entry_count` integer DEFAULT 0 NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`session_id`) REFERENCES `sessions`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `usage_rollups_agent_id_idx` ON `usage_rollups` (`agent_id`);--> statement-breakpoint
+CREATE TABLE `usage_tool_rollups` (
+	`session_id` text NOT NULL,
+	`tool_name` text NOT NULL,
+	`agent_id` text NOT NULL,
+	`calls` integer DEFAULT 0 NOT NULL,
+	PRIMARY KEY(`session_id`, `tool_name`),
+	FOREIGN KEY (`session_id`) REFERENCES `sessions`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`agent_id`) REFERENCES `agents`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `usage_tool_rollups_agent_id_idx` ON `usage_tool_rollups` (`agent_id`);

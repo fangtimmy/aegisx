@@ -11,8 +11,7 @@ import type {
   EventToolUsageItem,
 } from "@aegisx/shared"
 import { progressOf } from "@aegisx/shared"
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm"
-import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
+import { asc, count, desc, eq, inArray, sql } from "drizzle-orm"
 
 import type { Database } from "../db"
 import {
@@ -21,8 +20,9 @@ import {
   challengeRemote,
   challenges,
   channelMessages,
-  sessionEntries,
   spawnQueue,
+  usageRollups,
+  usageToolRollups,
 } from "../db/schema"
 import {
   isPlatformIntegrated,
@@ -39,32 +39,25 @@ type UsageTotals = {
   turns: number
 }
 
-/** One usage column summed over the group's rows (NULL rows contribute
- * nothing; an all-NULL group sums to 0). */
-const sumColumn = (column: AnySQLiteColumn) =>
-  sql<number>`COALESCE(SUM(${column}), 0)`
-
-/** The single aggregate pass over the event's session_entries, grouped by
- * agent: per-model and per-challenge usage roll up from these rows in JS
- * (agentRows carry model/challengeId) instead of re-scanning the largest
- * table. Reads the same first-class usage columns as sumUsageTotals
- * (run/host/session-queries). */
+/** Per-agent usage + toolCalls straight off the usage_rollups projection
+ * (D 批 — the aggregate used to scan session_entries grouped by agent; the
+ * rollup rows are maintained by the entry-write transaction). */
 function usageByAgentRows(db: Database, eventId: string) {
   return db
     .select({
-      key: agents.id,
-      input: sumColumn(sessionEntries.inputTokens),
-      output: sumColumn(sessionEntries.outputTokens),
-      cacheRead: sumColumn(sessionEntries.cacheReadTokens),
-      cacheWrite: sumColumn(sessionEntries.cacheWriteTokens),
-      cost: sumColumn(sessionEntries.cost),
-      turns: sql<number>`SUM(CASE WHEN ${sessionEntries.role} = 'assistant' THEN 1 ELSE 0 END)`,
-      toolCalls: sql<number>`SUM(CASE WHEN ${sessionEntries.role} = 'toolResult' THEN 1 ELSE 0 END)`,
+      key: usageRollups.agentId,
+      input: sql<number>`COALESCE(SUM(${usageRollups.inputTokens}), 0)`,
+      output: sql<number>`COALESCE(SUM(${usageRollups.outputTokens}), 0)`,
+      cacheRead: sql<number>`COALESCE(SUM(${usageRollups.cacheReadTokens}), 0)`,
+      cacheWrite: sql<number>`COALESCE(SUM(${usageRollups.cacheWriteTokens}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${usageRollups.cost}), 0)`,
+      turns: sql<number>`COALESCE(SUM(${usageRollups.turns}), 0)`,
+      toolCalls: sql<number>`COALESCE(SUM(${usageRollups.toolCalls}), 0)`,
     })
-    .from(sessionEntries)
-    .innerJoin(agents, eq(sessionEntries.agentId, agents.id))
+    .from(usageRollups)
+    .innerJoin(agents, eq(agents.id, usageRollups.agentId))
     .where(eq(agents.eventId, eventId))
-    .groupBy(agents.id)
+    .groupBy(usageRollups.agentId)
     .all()
 }
 
@@ -243,18 +236,19 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
   modelBilling.sort((a, b) => b.cost - a.cost || b.requests - a.requests)
 
   // --- Score timeline ---------------------------------------------------
+  const challengeById = new Map(
+    challengeRows.map(({ challenge }) => [challenge.id, challenge])
+  )
   const scoreTimeline: EventScorePoint[] = []
   for (const flag of flagRows) {
     if (flag.status !== "accepted") continue
-    const entry = challengeRows.find(
-      ({ challenge }) => challenge.id === flag.challengeId
-    )
-    if (!entry) continue
+    const challenge = challengeById.get(flag.challengeId)
+    if (!challenge) continue
     scoreTimeline.push({
       time: flag.updatedAt,
-      challengeId: entry.challenge.id,
-      challengeName: entry.challenge.name,
-      points: entry.challenge.points ?? 0,
+      challengeId: challenge.id,
+      challengeName: challenge.name,
+      points: challenge.points ?? 0,
       cumulative: 0,
       source: flag.source,
     })
@@ -284,9 +278,16 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
   }
 
   // --- Per-challenge efficiency ----------------------------------------
+  const solversByChallenge = new Map<string, typeof solverRows>()
+  for (const row of solverRows) {
+    if (row.challengeId === null) continue
+    const list = solversByChallenge.get(row.challengeId) ?? []
+    list.push(row)
+    solversByChallenge.set(row.challengeId, list)
+  }
   const challengeEfficiency: EventChallengeEfficiency[] = challengeRows.map(
     ({ challenge }) => {
-      const rows = solverRows.filter((row) => row.challengeId === challenge.id)
+      const rows = solversByChallenge.get(challenge.id) ?? []
       const usage = usageByChallenge.get(challenge.id)
       const flags = flagsByChallenge.get(challenge.id) ?? []
       return {
@@ -435,8 +436,9 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
       name: row.name ?? row.id,
       challengeId: row.challengeId,
       challengeName:
-        challengeRows.find(({ challenge }) => challenge.id === row.challengeId)
-          ?.challenge.name ?? null,
+        row.challengeId !== null
+          ? (challengeNameOf.get(row.challengeId) ?? null)
+          : null,
       model: row.model,
       source: row.source,
       status: row.status,
@@ -545,19 +547,24 @@ export function buildEventStats(db: Database, eventId: string): EventStats {
   }
 
   // --- Tool usage -------------------------------------------------------
+  // Per-tool counts off the usage_tool_rollups projection, scoped to the
+  // event through the rollup's redundant agent anchor.
   const toolRows = db
-    .select({ tool: sessionEntries.toolName, calls: count() })
-    .from(sessionEntries)
-    .innerJoin(agents, eq(sessionEntries.agentId, agents.id))
-    .where(
-      and(eq(agents.eventId, eventId), eq(sessionEntries.role, "toolResult"))
-    )
-    .groupBy(sessionEntries.toolName)
-    .orderBy(desc(count()))
+    .select({
+      tool: usageToolRollups.toolName,
+      calls: sql<number>`COALESCE(SUM(${usageToolRollups.calls}), 0)`,
+    })
+    .from(usageToolRollups)
+    .innerJoin(agents, eq(agents.id, usageToolRollups.agentId))
+    .where(eq(agents.eventId, eventId))
+    .groupBy(usageToolRollups.toolName)
+    .orderBy(desc(sql`SUM(${usageToolRollups.calls})`))
     .limit(10)
     .all()
   const toolUsage: EventToolUsageItem[] = toolRows.flatMap((row) =>
-    row.tool === null ? [] : [{ tool: row.tool, calls: row.calls }]
+    row.tool === null || row.calls === 0
+      ? []
+      : [{ tool: row.tool, calls: row.calls }]
   )
 
   // --- Window -----------------------------------------------------------

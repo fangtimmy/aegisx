@@ -10,9 +10,13 @@ import {
 } from "../../src/run/host/entry-usage"
 import { entryFromRow } from "../../src/run/host/session-entry-codec"
 import {
+  agentUsageTotals,
   sumUsageTotals,
-  usageTotalsSql,
 } from "../../src/run/host/session-queries"
+import {
+  applyRollupDelta,
+  rollupDeltaOf,
+} from "../../src/run/host/usage-rollups"
 import { seedAgent, seedChallenge, seedEvent, setupDb, now } from "../helpers"
 
 type Db = ReturnType<typeof setupDb>["db"]
@@ -31,7 +35,8 @@ function usage(overrides: Partial<EntryUsage> = {}): EntryUsage {
 }
 
 /** Seed one session the way the adapter would persist it: canonical body +
- * first-class columns extracted from the entry's usage. For non-message kinds
+ * first-class columns extracted from the entry's usage — plus the rollup
+ * increment the adapter's write transaction applies. For non-message kinds
  * the usage object rides in `payload` (the fold reads it there); message rows
  * carry it inside `message`. */
 function insertEntry(
@@ -52,6 +57,12 @@ function insertEntry(
       ? { ...rawMessage, usage: entry.usage }
       : undefined
   const messageRole = typeof message?.role === "string" ? message.role : null
+  const role =
+    messageRole === "user" ||
+    messageRole === "assistant" ||
+    messageRole === "toolResult"
+      ? messageRole
+      : null
   db.insert(sessionEntries)
     .values({
       id: `parity-${seq}`,
@@ -59,12 +70,7 @@ function insertEntry(
       agentId,
       seq,
       type: entry.kind,
-      role:
-        messageRole === "user" ||
-        messageRole === "assistant" ||
-        messageRole === "toolResult"
-          ? messageRole
-          : null,
+      role,
       inputTokens: entry.usage?.input ?? null,
       outputTokens: entry.usage?.output ?? null,
       cacheReadTokens: entry.usage?.cacheRead ?? null,
@@ -83,6 +89,24 @@ function insertEntry(
       ),
     })
     .run()
+  applyRollupDelta(db, {
+    sessionId,
+    agentId,
+    toolName:
+      role === "toolResult" && typeof message?.toolName === "string"
+        ? message.toolName
+        : null,
+    delta: rollupDeltaOf({
+      role,
+      inputTokens: entry.usage?.input ?? null,
+      outputTokens: entry.usage?.output ?? null,
+      cacheReadTokens: entry.usage?.cacheRead ?? null,
+      cacheWriteTokens: entry.usage?.cacheWrite ?? null,
+      reasoningTokens: entry.usage?.reasoning ?? null,
+      cost: entry.usage?.cost?.total ?? null,
+    }),
+    at: now(),
+  })
 }
 
 /** JS side of the parity: de-canonicalize committed rows, skipping corrupt
@@ -124,7 +148,14 @@ function setup(db: Db) {
     .run()
 }
 
-const scopeOf = (_db: Db) => eq(sessionEntries.agentId, "a-1")
+const scopeAgent = "a-1"
+
+const scopeOf = (_db: Db) => eq(sessionEntries.agentId, scopeAgent)
+
+/** The rollup-backed read face (the SQL side of the parity). */
+function rollupTotals(db: Db) {
+  return agentUsageTotals(db, [scopeAgent])
+}
 
 describe("usage aggregation column/fold parity", () => {
   test("mixed entry mix aggregates identically (tokens, cost, turns)", () => {
@@ -163,7 +194,7 @@ describe("usage aggregation column/fold parity", () => {
       })
 
       const js = accumulateEntryUsage(readEntries(db, scopeOf(db)))
-      const totals = usageTotalsSql(db, scopeOf(db))
+      const totals = rollupTotals(db)
 
       expect(totals.input).toBe(js.input)
       expect(totals.output).toBe(js.output)
@@ -182,7 +213,7 @@ describe("usage aggregation column/fold parity", () => {
     }
   })
 
-  test("empty scope: SQL matches JS zeros; sumUsageTotals returns undefined", () => {
+  test("empty scope: rollups match JS zeros; sumUsageTotals returns undefined", () => {
     const { db, close } = setupDb()
     try {
       setup(db)
@@ -202,20 +233,19 @@ describe("usage aggregation column/fold parity", () => {
       })
 
       const js = accumulateEntryUsage(readEntries(db, scopeOf(db)))
-      const totals = usageTotalsSql(db, scopeOf(db))
+      const totals = rollupTotals(db)
       expect(totals.turns).toBe(js.turns)
       expect(totals.input).toBe(js.input)
       expect(totals.cost).toBe(js.cost)
-      expect(totals.cacheHitRate).toBeNull()
       expect(js.turns).toBe(0)
       // All-zero → the sumUsageTotals "nothing used → undefined" rule.
-      expect(sumUsageTotals(db, scopeOf(db))).toBeUndefined()
+      expect(sumUsageTotals(db, [scopeAgent])).toBeUndefined()
     } finally {
       close()
     }
   })
 
-  test("cacheHitRate: the LATEST assistant row with prompt tokens wins (SQL matches fold)", () => {
+  test("cacheHitRate: the LATEST assistant row with prompt tokens wins (fold rule, the live strip's source)", () => {
     const { db, close } = setupDb()
     try {
       setup(db)
@@ -237,10 +267,8 @@ describe("usage aggregation column/fold parity", () => {
       })
 
       const js = accumulateEntryUsage(readEntries(db, scopeOf(db)))
-      const totals = usageTotalsSql(db, scopeOf(db))
       // prompt = input + cacheRead + cacheWrite = 125 → 25/125 = 20%.
       expect(js.cacheHitRate).toBe(20)
-      expect(totals.cacheHitRate).toBe(20)
     } finally {
       close()
     }
