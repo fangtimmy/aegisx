@@ -8,6 +8,7 @@ import type {
 } from "@aegisx/shared"
 import { get, isActiveAgentStatus, LIVE_AGENT_STATUSES } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 import { and, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../db"
@@ -55,6 +56,7 @@ import { chainLock } from "./locks"
 import { createModelResolver } from "./model-resolver"
 import { createNoticePublisher } from "./orch-notices"
 import { createPlanApplier } from "./plan/applier"
+import { createSubmitPlanTool } from "./plan/tool"
 import {
   assertMayTouchAgent,
   assertMayTouchChallenge,
@@ -244,6 +246,29 @@ export function createAgentService(options: AgentServiceOptions) {
 
   // --- L2: the agent kernel ---------------------------------------------------
 
+  /** The scheduler's role-based native tools (B 批): the ONE management
+   * write, the in-process submit_plan tool. Built per orchestrator session
+   * (spawn AND reopen) from the L3 applier + engine; the closure reads the
+   * consts declared further below — every call happens long after
+   * assembly. */
+  function orchestratorTools(row: {
+    id: string
+    eventId: string
+  }): ToolDefinition[] {
+    return [
+      createSubmitPlanTool(
+        {
+          submitPlan: (eventId, plan, principal) =>
+            planApplier.submitPlan(eventId, plan, principal),
+          turnGenerationOf: (agentId) => kernel.turnGenerationOf(agentId),
+          registerPlan: (registration) =>
+            decisionEngine.registerPlan(registration),
+        },
+        { agentId: row.id, eventId: row.eventId }
+      ),
+    ]
+  }
+
   const kernel = createAgentKernel({
     db,
     dataDir,
@@ -265,6 +290,7 @@ export function createAgentService(options: AgentServiceOptions) {
     agentSettings,
     createHost,
     admission,
+    orchestratorTools,
     unattended,
   })
 

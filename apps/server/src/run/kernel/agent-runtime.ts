@@ -169,7 +169,7 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
           })
           return
         }
-        deps.status.agentTurnSettled(agentId, error)
+        deps.status.agentTurnSettled(agentId, error, gen)
       })
       .catch((err) => {
         // A kernel close mid-turn rejects the lock with invalid_state — a
@@ -404,6 +404,9 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
     hasSession: () => session !== undefined,
     mountSession,
     unmountSession,
+    /** The agent's current turn generation (read-only — the submit_plan tool
+     * stamps its registration with the in-flight turn's generation). */
+    turnGeneration: () => turnGen,
     send,
     abort,
     requestFinish,

@@ -20,7 +20,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 26
+export const SCHEMA_VERSION = 27
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -611,5 +611,37 @@ export const domainEvents = sqliteTable(
     index("domain_events_challenge_id_id_idx").on(table.challengeId, table.id),
     index("domain_events_agent_id_id_idx").on(table.agentId, table.id),
     index("domain_events_causation_id_idx").on(table.causationId),
+  ]
+)
+
+/**
+ * Plan-ref idempotency projection (B 批)：the applier's (scheduler, ref) dedup
+ * key materialized. The projector maintains it from `plan.proposed` (one row
+ * per action ref — first proposal owns the row) and `plan.result` (fills
+ * `outcome`) inside the append transaction. `canonical` is the sorted-key
+ * JSON of the action, so identical-content resubmissions replay idempotently
+ * while a ref reuse with different content reads as duplicate_ref. No FKs —
+ * plan history outlives agent rows (domain_events convention); rows live for
+ * the event's lifetime like the fact stream they project.
+ */
+export const planRefs = sqliteTable(
+  "plan_refs",
+  {
+    eventId: text("event_id").notNull(),
+    /** The submitter key the dedup resolves against (agent id / 'user' /
+     * 'system') — mirrors plan.proposed's schedulerAgentId. */
+    schedulerAgentId: text("scheduler_agent_id").notNull(),
+    ref: text("ref").notNull(),
+    canonical: text("canonical").notNull(),
+    planId: text("plan_id").notNull(),
+    /** The per-ref result as JSON once plan.result landed; null while the
+     * plan's deferred application chain is still running. */
+    outcome: text("outcome"),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.eventId, table.schedulerAgentId, table.ref],
+    }),
+    index("plan_refs_plan_id_idx").on(table.planId),
   ]
 )

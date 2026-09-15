@@ -160,7 +160,109 @@ describe("decision points drive the scheduler (§3.6)", () => {
     }
   })
 
-  test("a scheduler-submitted plan inside the turn window closes the point as plan", async () => {
+  test("the scheduler's plan closes the point via the native submit_plan tool (registered mid-turn)", async () => {
+    const promptLog = new Map<string, string[]>()
+    /** extraTools each session was built with (role-injection probe). */
+    const extraTools = new Map<string, Array<{ name: string }>>()
+    let made: ReturnType<typeof makeAgentService> | undefined
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    try {
+      const h = makeAgentService({
+        decisionTimings: {
+          coalesceMs: 5,
+          errorRetryMs: 20,
+          periodicMs: 3_600_000,
+        },
+        createHost: mock(
+          async (input: {
+            agentId: string
+            extraTools?: Array<{ name: string }>
+          }) => {
+            const stub = stubHostAgentSession(
+              "sess-" + input.agentId.slice(0, 6)
+            )
+            extraTools.set(input.agentId, input.extraTools ?? [])
+            const list: string[] = []
+            promptLog.set(input.agentId, list)
+            const sdk = refine<{
+              prompt: (text: string) => Promise<void>
+            }>(stub.session)
+            sdk.prompt = async (text: string) => {
+              list.push(text)
+              // Only the scheduler's decision-point turn hangs on the gate.
+              if (text.includes("回合协议")) await gate
+            }
+            return stub
+          }
+        ),
+      })
+      made = h
+      const { db, service } = h
+
+      await service.startScheduler("evt-1")
+      await settle()
+      const orch = orchestratorOf(db)
+
+      // B 批 injection: the orchestrator session carries the native tool,
+      // spawned by ROLE (not the row's tools snapshot).
+      const submitPlanTool = refine<
+        | {
+            execute: (
+              id: string,
+              params: unknown
+            ) => Promise<{ content: Array<{ text: string }> }>
+          }
+        | undefined
+      >((extraTools.get(orch.id) ?? []).find((t) => t.name === "submit_plan"))
+      expect(submitPlanTool).toBeTruthy()
+      expect(JSON.parse(orch.tools)).toEqual(["submit_plan"])
+
+      const solver = await service.spawn(
+        { eventId: "evt-1", challengeId: "ch-1" },
+        USER
+      )
+      expect(
+        (extraTools.get(solver.id) ?? []).some((t) => t.name === "submit_plan")
+      ).toBe(false)
+      await settle()
+      // The decision-point turn is now mid-flight (hung in prompt) — match
+      // the payload's protocol demand, not the initial prompt.
+      await waitUntil(() =>
+        (promptLog.get(orch.id) ?? []).some((t) => t.includes("回合协议"))
+      )
+      expect(
+        decisionPoints(db).some((d) => d.type === "decision_point.opened")
+      ).toBe(true)
+
+      // The scheduler "calls the tool" mid-turn: in-process applier + a plan
+      // registration stamped with the in-flight turn's generation.
+      const result = await submitPlanTool!.execute("call-1", {
+        rationale: "quiet round, nothing to do",
+        actions: [{ ref: "r1", kind: "noOp", reason: "no change" }],
+      })
+      const parsed = refine<{
+        planId: string
+        results: Array<{ ref: string; ok: boolean; kind: string }>
+      }>(JSON.parse(result.content[0]?.text ?? "{}"))
+      expect(parsed.planId).toBeTruthy()
+      expect(parsed.results[0]).toMatchObject({ ref: "r1", ok: true })
+
+      release()
+      await waitUntil(() =>
+        decisionPoints(db).some((d) => d.type === "decision_point.closed")
+      )
+      const closed = decisionPoints(db).find(
+        (d) => d.type === "decision_point.closed"
+      )
+      expect(closed?.outcome).toBe("plan")
+    } finally {
+      release()
+      await made?.close().catch(() => undefined)
+    }
+  })
+
+  test("a plan submitted over the HTTP endpoint (no tool, no registration) does NOT close the point", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeAgentService> | undefined
     let release!: () => void
@@ -181,7 +283,6 @@ describe("decision points drive the scheduler (§3.6)", () => {
           }>(stub.session)
           sdk.prompt = async (text: string) => {
             list.push(text)
-            // Only the scheduler's decision-point turn hangs on the gate.
             if (text.includes("回合协议")) await gate
           }
           return stub
@@ -193,28 +294,21 @@ describe("decision points drive the scheduler (§3.6)", () => {
       await service.startScheduler("evt-1")
       await settle()
       const orch = orchestratorOf(db)
-
       const solver = await service.spawn(
         { eventId: "evt-1", challengeId: "ch-1" },
         USER
       )
       await settle()
-      // The decision-point turn is now mid-flight (hung in prompt) — match
-      // the payload's protocol demand, not the initial prompt.
       await waitUntil(() =>
         (promptLog.get(orch.id) ?? []).some((t) => t.includes("回合协议"))
       )
-      const opened = decisionPoints(db).find(
-        (d) => d.type === "decision_point.opened"
-      )
-      expect(opened).toBeTruthy()
 
-      // The scheduler submits its plan from the container (HTTP endpoint)
-      // WHILE the decision-point turn is in flight.
+      // The escape hatch is admitted (the endpoint's verdict allows this
+      // event's scheduler) but never registers → the ladder owns the turn.
       await service.submitPlan(
         "evt-1",
         {
-          rationale: "quiet round, nothing to do",
+          rationale: "endpoint plan",
           actions: [{ ref: "r1", kind: "noOp", reason: "no change" }],
         },
         {
@@ -232,7 +326,7 @@ describe("decision points drive the scheduler (§3.6)", () => {
       const closed = decisionPoints(db).find(
         (d) => d.type === "decision_point.closed"
       )
-      expect(closed?.outcome).toBe("plan")
+      expect(closed?.outcome).toBe("violation")
       expect(solver.id).toBeTruthy()
     } finally {
       release()

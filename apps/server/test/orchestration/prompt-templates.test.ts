@@ -337,7 +337,7 @@ describe("notice wording sync (typed notice templates ↔ orchestrator template 
     // The scheduler template teaches the plan verb — pause/resume reach it
     // as queue.changed triggers, not quoted ledger lines.
     expect(DEFAULT_ORCHESTRATOR_SYSTEM_PROMPT_TEMPLATE).toContain(
-      "set_queue_paused"
+      "setQueuePaused"
     )
   })
 })

@@ -141,7 +141,7 @@ def announce(challenge_id: str, text: str) -> ChannelMessage:
     challenge — every live agent on the challenge receives it on the next
     delivery tick; non-urgent FYI by design). Use for FYI guidance; direct
     one agent with `channels.post("dm:<agentId>", ...)` or a plan `message`
-    action."""
+    action (via the scheduler's submit_plan tool)."""
     team = f"team:{challenge_id}"
     data = get_client().request(
         "POST",

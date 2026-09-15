@@ -17,6 +17,7 @@ import { responseJson } from "../lib/guards"
 import { EmptyInputSchema } from "../lib/schemas"
 import { platformActionHttpError } from "../platforms/errors"
 import { RunActionError, runActionError as runError } from "./errors"
+import { planInputSchema } from "./plan/schema"
 import type { AgentService } from "./service"
 import { streamLive } from "./sse"
 
@@ -85,108 +86,10 @@ const queueInput = Type.Object(
 
 const emptyInput = EmptyInputSchema
 
-/** Scheduler plan (control-plane §B): the word list v1 — every variant
- * carries the scheduler's own short `ref`. Rationale is required; the action
- * list may be empty (the applier rejects it as an empty_plan outcome, not a
- * schema error). */
-const planRef = Type.String({ minLength: 1, maxLength: 64 })
-const planAction = Type.Union([
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("enqueue"),
-      challengeId: Type.String({ minLength: 1 }),
-      prompt: Type.Optional(Type.String({ maxLength: 20_000 })),
-      model: Type.Optional(Type.String({ maxLength: 300 })),
-      timeoutMs: Type.Optional(Type.Integer({ minimum: 60_000 })),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("message"),
-      agentId: Type.String({ minLength: 1 }),
-      text: Type.String({ minLength: 1, maxLength: 20_000 }),
-      urgent: Type.Optional(Type.Boolean()),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("stop"),
-      agentId: Type.String({ minLength: 1 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("close"),
-      agentId: Type.String({ minLength: 1 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("finish"),
-      agentId: Type.String({ minLength: 1 }),
-      summary: Type.String({ minLength: 1, maxLength: 20_000 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("setDeadline"),
-      agentId: Type.String({ minLength: 1 }),
-      timeoutMs: Type.Integer({ minimum: 60_000 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("cancelItem"),
-      itemId: Type.String({ minLength: 1 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("reorder"),
-      itemIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("setQueuePaused"),
-      paused: Type.Boolean(),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      ref: planRef,
-      kind: Type.Literal("noOp"),
-      reason: Type.String({ minLength: 1, maxLength: 4_000 }),
-    },
-    { additionalProperties: false }
-  ),
-])
-
-const planInput = Type.Object(
-  {
-    rationale: Type.String({ minLength: 1, maxLength: 4_000 }),
-    actions: Type.Array(planAction, { maxItems: 50 }),
-  },
-  { additionalProperties: false }
-)
+/** Scheduler plan (control-plane §B): the canonical TypeBox schema
+ * (run/plan/schema.ts) — the same source the native submit_plan tool
+ * serializes its JSON Schema from. */
+const planInput = planInputSchema
 
 /** Flat-backtrack body: the session_entries.seq to KEEP (delete everything
  * after it in the agent's active session). */

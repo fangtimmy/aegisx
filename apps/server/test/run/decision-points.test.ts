@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent"
 import { eq } from "drizzle-orm"
 
 import { createDatabase } from "../../src/db"
@@ -11,7 +12,9 @@ import {
   DEFAULT_TIMINGS,
   type DecisionTimings,
 } from "../../src/run/decision-points/engine"
+import { createSubmitPlanTool } from "../../src/run/plan/tool"
 import { now, seedAgent, seedChallenge, seedEvent } from "../helpers"
+import { refine } from "../support"
 
 const TIMINGS: DecisionTimings = {
   coalesceMs: 1_000,
@@ -99,25 +102,19 @@ function events(db: Db, type: string) {
 /** Flush the engine's microtasks (chain + send) after a clock advance. */
 const settle = () => new Promise((r) => setTimeout(r, 5))
 
-/** Emulate a scheduler turn that submitted the given actions at `atMs`. */
-function submitPlanEvent(db: Db, actions: unknown[], atMs: number): void {
-  db.insert(domainEvents)
-    .values({
-      type: "plan.proposed",
-      eventId: "evt-1",
-      agentId: "sched",
-      actorKind: "agent",
-      actorId: "sched",
-      payload: JSON.stringify({
-        planId: crypto.randomUUID(),
-        rationale: "r",
-        actions,
-        schedulerAgentId: "sched",
-        at: new Date(atMs).toISOString(),
-      }),
-      createdAt: new Date(atMs).toISOString(),
-    })
-    .run()
+/** Register the plan the submit_plan tool would have registered mid-turn
+ * (B 批): the tool handler stamps the in-flight turn's generation at call
+ * time; the engine consumes it only at a clean settle of THAT generation. */
+function registerPlan(
+  engine: ReturnType<typeof createDecisionPointEngine>,
+  turnGeneration: number,
+  allNoOp: boolean
+): void {
+  engine.registerPlan({
+    schedulerAgentId: "sched",
+    turnGeneration,
+    allNoOp,
+  })
 }
 
 describe("decision-point engine (§3.6)", () => {
@@ -164,11 +161,11 @@ describe("decision-point engine (§3.6)", () => {
       expect(sends).toHaveLength(1)
       // Settle the turn with no plan → ONE strict re-prompt → violation →
       // the pending trigger opens the next point.
-      engine.onTurnSettled("sched", null)
+      engine.onTurnSettled("sched", null, 1)
       await settle()
       expect(sends).toHaveLength(2) // strict re-prompt
       expect(sends[1]).toContain("违约提醒")
-      engine.onTurnSettled("sched", null)
+      engine.onTurnSettled("sched", null, 2)
       await settle()
       const closed = events(db, "decision_point.closed")
       expect(closed[0].outcome).toBe("violation")
@@ -200,7 +197,7 @@ describe("decision-point engine (§3.6)", () => {
     }
   })
 
-  test("a submit_plan inside the turn window closes the point as plan (noOp included)", async () => {
+  test("an accepted submit_plan registered mid-turn closes the point as plan (noOp included)", async () => {
     const { db, close } = setupDbLite()
     try {
       seedWorld(db)
@@ -213,13 +210,10 @@ describe("decision-point engine (§3.6)", () => {
       clock.advance(TIMINGS.coalesceMs)
       await settle()
 
-      // The endpoint call arrives mid-turn: payload.at inside the window.
-      submitPlanEvent(
-        db,
-        [{ ref: "r1", kind: "noOp", reason: "quiet" }],
-        clock.now()
-      )
-      engine.onTurnSettled("sched", null)
+      // The tool call happened inside the payload turn (generation 1); the
+      // settle reports the SAME generation → consumption.
+      registerPlan(engine, 1, true)
+      engine.onTurnSettled("sched", null, 1)
       await settle()
       const closed = events(db, "decision_point.closed")
       expect(closed).toHaveLength(1)
@@ -230,17 +224,11 @@ describe("decision-point engine (§3.6)", () => {
     }
   })
 
-  test("a plan submitted BEFORE the window does not correlate → violation path", async () => {
+  test("an APPLY-phase fast failure still closes the point as plan; a VALIDATION rejection does not", async () => {
     const { db, close } = setupDbLite()
     try {
       seedWorld(db)
-      const { engine, clock } = await makeEngine(db)
-      // A stale plan from an earlier turn.
-      submitPlanEvent(
-        db,
-        [{ ref: "old", kind: "noOp", reason: "old" }],
-        clock.now() - 10_000
-      )
+      const { engine, clock, sends } = await makeEngine(db)
       engine.trigger("evt-1", {
         kind: "agent.settled",
         agentId: "a1",
@@ -248,9 +236,154 @@ describe("decision-point engine (§3.6)", () => {
       })
       clock.advance(TIMINGS.coalesceMs)
       await settle()
-      engine.onTurnSettled("sched", null)
+
+      // The real submit_plan tool wired to the real engine; the applier dep
+      // returns the exact result shape an apply-phase fast failure produces
+      // (plan.proposed HAS landed — planId present — while the message ref
+      // burned mid-apply, e.g. its target closed between validation and
+      // application).
+      const noCtx = refine<ExtensionContext>({})
+      const tool = createSubmitPlanTool(
+        {
+          submitPlan: async () => ({
+            planId: crypto.randomUUID(),
+            results: [
+              {
+                ref: "m1",
+                kind: "message",
+                ok: false,
+                code: "wrong_state",
+                message: "agent closed mid-turn",
+              },
+            ],
+            queueAfter: [],
+            deferred: [],
+          }),
+          turnGenerationOf: () => 1,
+          registerPlan: (registration) => engine.registerPlan(registration),
+        },
+        { agentId: "sched", eventId: "evt-1" }
+      )
+      await tool.execute(
+        "call-1",
+        {
+          rationale: "steer a1",
+          actions: [
+            { ref: "m1", kind: "message", agentId: "a1", text: "steer" },
+          ],
+        },
+        undefined,
+        undefined,
+        noCtx
+      )
+      // The failed ref did NOT un-answer the point: the proposal landed, so
+      // the same-generation settle closes it as plan.
+      engine.onTurnSettled("sched", null, 1)
+      await settle()
+      expect(sends).toHaveLength(1) // no re-prompt
+      expect(events(db, "decision_point.closed")[0].outcome).toBe("plan")
+
+      // A VALIDATION-phase rejection (no planId — nothing proposed) still
+      // does not register: the next point takes the violation ladder.
+      engine.trigger("evt-1", { kind: "queue.changed", reason: "enqueued" })
+      clock.advance(TIMINGS.coalesceMs)
+      await settle()
+      const rejecting = createSubmitPlanTool(
+        {
+          submitPlan: async () => ({
+            results: [
+              {
+                ref: "e1",
+                kind: "enqueue",
+                ok: false,
+                code: "unknown_challenge",
+                message: "nope",
+              },
+            ],
+            queueAfter: [],
+            deferred: [],
+          }),
+          turnGenerationOf: () => 2,
+          registerPlan: (registration) => engine.registerPlan(registration),
+        },
+        { agentId: "sched", eventId: "evt-1" }
+      )
+      await rejecting.execute(
+        "call-2",
+        {
+          rationale: "spawn",
+          actions: [{ ref: "e1", kind: "enqueue", challengeId: "ch-1" }],
+        },
+        undefined,
+        undefined,
+        noCtx
+      )
+      engine.onTurnSettled("sched", null, 2)
+      await settle()
+      expect(sends).toHaveLength(3) // payload + strict re-prompt
+      expect(sends[2]).toContain("违约提醒")
+      engine.onTurnSettled("sched", null, 3)
+      await settle()
+      const closed = events(db, "decision_point.closed")
+      expect(closed.map((c) => c.outcome)).toEqual(["plan", "violation"])
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a registration from ANOTHER turn does not correlate → violation path", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      const { engine, clock } = await makeEngine(db)
+      // A stale registration (an earlier turn's plan must not satisfy a
+      // later point — the generation replaced the time window).
+      registerPlan(engine, 99, true)
+      engine.trigger("evt-1", {
+        kind: "agent.settled",
+        agentId: "a1",
+        status: "idle",
+      })
+      clock.advance(TIMINGS.coalesceMs)
+      await settle()
+      engine.onTurnSettled("sched", null, 1)
       await settle() // re-prompt
-      engine.onTurnSettled("sched", null)
+      engine.onTurnSettled("sched", null, 2)
+      await settle()
+      const closed = events(db, "decision_point.closed")
+      expect(closed[0].outcome).toBe("violation")
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a plan inside an ERRORED turn never satisfies the re-issue (error path byte-identical)", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      const { engine, clock, sends } = await makeEngine(db)
+      engine.trigger("evt-1", {
+        kind: "flag.accepted",
+        challengeName: "web1",
+        tier: "first",
+      })
+      await settle()
+      // The plan landed (applied!) mid-turn, then the turn errored.
+      registerPlan(engine, 1, true)
+      engine.onTurnSettled("sched", "provider exploded", 1)
+      await settle()
+      expect(events(db, "decision_point.closed")).toHaveLength(0)
+      clock.advance(TIMINGS.errorRetryMs)
+      await settle()
+      expect(sends).toHaveLength(2) // same point re-issued
+      // The re-issued turn settles clean but the registration still carries
+      // the dead turn's generation → mismatch → the violation ladder.
+      engine.onTurnSettled("sched", null, 2)
+      await settle()
+      expect(sends).toHaveLength(3) // re-prompt first (phase was still turn)
+      engine.onTurnSettled("sched", null, 3)
       await settle()
       const closed = events(db, "decision_point.closed")
       expect(closed[0].outcome).toBe("violation")
@@ -276,10 +409,10 @@ describe("decision-point engine (§3.6)", () => {
         await settle()
         const base = round * 2 // each round = payload + strict re-prompt
         expect(sends[base]).toContain("[决策点")
-        engine.onTurnSettled("sched", null)
+        engine.onTurnSettled("sched", null, base + 1)
         await settle()
         expect(sends[base + 1]).toContain("违约提醒")
-        engine.onTurnSettled("sched", null)
+        engine.onTurnSettled("sched", null, base + 2)
         await settle()
       }
       expect(sends).toHaveLength(6)
@@ -301,9 +434,9 @@ describe("decision-point engine (§3.6)", () => {
       })
       clock.advance(TIMINGS.coalesceMs)
       await settle()
-      engine.onTurnSettled("sched", null)
+      engine.onTurnSettled("sched", null, 7)
       await settle()
-      engine.onTurnSettled("sched", null)
+      engine.onTurnSettled("sched", null, 8)
       await settle()
       expect(escalations).toHaveLength(1)
       engine.close()
@@ -326,7 +459,7 @@ describe("decision-point engine (§3.6)", () => {
       const openedBefore = events(db, "decision_point.opened")
 
       // First failure → retry scheduled.
-      engine.onTurnSettled("sched", "provider exploded")
+      engine.onTurnSettled("sched", "provider exploded", 1)
       await settle()
       expect(events(db, "decision_point.closed")).toHaveLength(0)
       clock.advance(TIMINGS.errorRetryMs)
@@ -339,14 +472,14 @@ describe("decision-point engine (§3.6)", () => {
       expect(sends[1]).toContain("[决策点")
 
       // Second failure exhausts the bound → outcome=error, no escalation.
-      engine.onTurnSettled("sched", "provider exploded again")
+      engine.onTurnSettled("sched", "provider exploded again", 2)
       clock.advance(TIMINGS.errorRetryMs)
       await settle()
       expect(events(db, "decision_point.opened")).toHaveLength(
         openedBefore.length
       )
       expect(sends).toHaveLength(3)
-      engine.onTurnSettled("sched", "boom")
+      engine.onTurnSettled("sched", "boom", 3)
       await settle()
       const closed = events(db, "decision_point.closed")
       expect(closed[0].outcome).toBe("error")
@@ -442,12 +575,8 @@ describe("decision-point engine (§3.6)", () => {
       await settle()
       expect(sends).toHaveLength(1)
       // Close it with an explicit noOp — records the quiet fingerprint.
-      submitPlanEvent(
-        db,
-        [{ ref: "r1", kind: "noOp", reason: "all quiet" }],
-        clock.now()
-      )
-      engine.onTurnSettled("sched", null)
+      registerPlan(engine, 1, true)
+      engine.onTurnSettled("sched", null, 1)
       await settle()
       expect(events(db, "decision_point.closed")[0].outcome).toBe("plan")
 
@@ -481,12 +610,8 @@ describe("decision-point engine (§3.6)", () => {
       })
       clock.advance(TIMINGS.coalesceMs)
       await settle()
-      submitPlanEvent(
-        db,
-        [{ ref: "r1", kind: "noOp", reason: "quiet" }],
-        clock.now()
-      )
-      engine.onTurnSettled("sched", null)
+      registerPlan(engine, 1, true)
+      engine.onTurnSettled("sched", null, 1)
       await settle()
       expect(events(db, "decision_point.closed")[0].outcome).toBe("plan")
 
@@ -519,12 +644,8 @@ describe("decision-point engine (§3.6)", () => {
       expect(escalations).toHaveLength(1)
       // A second noOp on the new situation re-arms; it escalates again only
       // after another full stall window.
-      submitPlanEvent(
-        db,
-        [{ ref: "r2", kind: "noOp", reason: "still quiet" }],
-        clock.now()
-      )
-      engine.onTurnSettled("sched", null)
+      registerPlan(engine, 2, true)
+      engine.onTurnSettled("sched", null, 2)
       await settle()
       clock.advance(TIMINGS.periodicMs + TIMINGS.stallMs + TIMINGS.coalesceMs)
       await settle()
@@ -548,12 +669,8 @@ describe("decision-point engine (§3.6)", () => {
       clock.advance(TIMINGS.coalesceMs)
       await settle()
       // A plan WITH actions closes the point: nothing arms.
-      submitPlanEvent(
-        db,
-        [{ ref: "r1", kind: "enqueue", challengeId: "ch-1" }],
-        clock.now()
-      )
-      engine.onTurnSettled("sched", null)
+      registerPlan(engine, 1, false)
+      engine.onTurnSettled("sched", null, 1)
       await settle()
       expect(events(db, "decision_point.closed")[0].outcome).toBe("plan")
       clock.advance(TIMINGS.periodicMs + TIMINGS.stallMs + TIMINGS.coalesceMs)
@@ -611,7 +728,7 @@ describe("decision-point engine (§3.6)", () => {
       seedWorld(db)
       seedAgent(db, { id: "solver-1", status: "idle" })
       const { engine, clock, sends } = await makeEngine(db)
-      engine.onTurnSettled("solver-1", null)
+      engine.onTurnSettled("solver-1", null, 1)
       await settle()
       expect(sends).toHaveLength(0)
       clock.advance(TIMINGS.coalesceMs)
@@ -631,15 +748,11 @@ describe("decision-point engine (§3.6)", () => {
     const { db, close } = setupDbLite()
     try {
       seedWorld(db)
-      const { engine, clock } = await makeEngine(db)
+      const { engine } = await makeEngine(db)
       engine.trigger("evt-1", { kind: "boot.resync" })
       await settle()
-      submitPlanEvent(
-        db,
-        [{ ref: "r1", kind: "enqueue", challengeId: "ch-1" }],
-        clock.now()
-      )
-      engine.onTurnSettled("sched", null)
+      registerPlan(engine, 1, false)
+      engine.onTurnSettled("sched", null, 1)
       await settle()
       const opened = events(db, "decision_point.opened")[0]!
       expect(opened.triggers[0]).toContain("boot.resync")

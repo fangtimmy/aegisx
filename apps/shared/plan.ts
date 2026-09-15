@@ -70,6 +70,9 @@ export type PlanRefResult = {
  * this returns; slow ones ride the per-event application chain and report
  * through plan.result. */
 export type SubmitPlanResult = {
+  /** The proposal's id — present when this call landed a new plan.proposed
+   * (absent on pure idempotent replays and whole-plan rejections). */
+  planId?: string
   results: PlanRefResult[]
   /** The event's queue view after the fast phase. */
   queueAfter: QueueItemPublic[]

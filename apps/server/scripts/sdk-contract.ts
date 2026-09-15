@@ -34,9 +34,6 @@ const eventId = "evt-contract"
 const challengeId = "ch-contract"
 const schedulerId = "agent-scheduler-contract"
 const solverId = "agent-solver-contract"
-// Disposable second solver: seeded TERMINAL (aborted) so the submit_plan
-// wrong_state path has a fresh (non-self) agent id to be asserted against.
-const solver2Id = "agent-solver2-contract"
 // Credentials are minted per-boot (no DB column): the harness mints through
 // the same module the exec path uses — valid ~1h, plenty for the run.
 const schedulerToken = mintAgentToken(schedulerId)
@@ -68,7 +65,6 @@ function seed(database: Database): void {
   for (const [id, challengeId_, role, name, status] of [
     [schedulerId, null, "orchestrator", "Scheduler", "idle"],
     [solverId, challengeId, "solver", "agent-solver", "idle"],
-    [solver2Id, challengeId, "solver", "agent-solver2", "aborted"],
   ] as const) {
     database
       .insert(agents)
@@ -176,7 +172,6 @@ const contract = await run(
     `--scheduler-id=${schedulerId}`,
     `--solver-token=${solverToken}`,
     `--solver-id=${solverId}`,
-    `--solver2-id=${solver2Id}`,
   ],
   repoRoot
 )

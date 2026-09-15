@@ -5,6 +5,7 @@ import type { FlatSettings, ModelRef } from "@aegisx/shared"
 import { get, isActiveAgentStatus, isTerminalAgentStatus } from "@aegisx/shared"
 import type { ProviderConnection, TargetState } from "@aegisx/shared/domain"
 import type { Api, Model } from "@earendil-works/pi-ai"
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 import { and, eq, inArray, ne } from "drizzle-orm"
 
 import type { Database } from "../../db"
@@ -237,6 +238,11 @@ export type AgentFactoryDeps = {
   markFinishFlagWarned(agentId: string): void
   /** Admission critical section (the composition-bound fence policy). */
   admission: SpawnAdmission
+  /** Role-based extra host tools for orchestrator sessions (the composition
+   * root binds the L3 submit_plan tool). Called at every session build; the
+   * factory merges the result after the agent's native tools and enables
+   * them by name. */
+  orchestratorTools(row: { id: string; eventId: string }): ToolDefinition[]
   getSettings: () => FlatSettings
   now: () => string
   status: AgentStatus
@@ -341,10 +347,10 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     createHost,
   } = deps
 
-  /** Scheduler management tools. EMPTY after the SDK convergence: the
-   * orchestrator manages via the container-side `aegisx` Python SDK + bash,
-   * not native tools. */
-  const ORCHESTRATOR_TOOLS: string[] = []
+  /** Scheduler snapshot tools: the native submit_plan write (B 批 — the ONE
+   * management surface, injected by ROLE at every session build, not derived
+   * from this snapshot; the row's list only records the grant). */
+  const ORCHESTRATOR_TOOLS: string[] = ["submit_plan"]
 
   // --- workspace contexts (per challenge / scheduler, single-flighted) ----
 
@@ -865,6 +871,13 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     const snapshotTools = safeParseTools(row.tools)
     const toolCtx = buildAgentToolContext(row)
     const nativeTools = createMainTools(toolCtx, snapshotTools)
+    // Role-based extras (the scheduler's submit_plan): bound by the
+    // composition root, injected by ROLE — never read from the tools
+    // snapshot — so the tool survives reopen/cold-resume identically.
+    const roleTools =
+      row.role === "orchestrator"
+        ? deps.orchestratorTools({ id: row.id, eventId: row.eventId })
+        : []
     // Solver agents work inside their own directory; the scheduler at the
     // workspace root (bash cwd + host file-tool root).
     const cwd =
@@ -886,8 +899,10 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         thinkingLevel: agentTarget.thinkingLevel,
         agentSettings: agentSettings(),
         systemPrompt: row.systemPrompt,
-        extraTools: nativeTools,
-        extraToolNames: snapshotTools,
+        extraTools: [...nativeTools, ...roleTools],
+        extraToolNames: [
+          ...new Set([...snapshotTools, ...roleTools.map((t) => t.name)]),
+        ],
         // Per-agent identity for the container-side `aegisx` SDK (the name
         // contract lives in container/env-contract.ts): the provider mints a
         // fresh short-lived token at every bash execute, so credentials are

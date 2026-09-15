@@ -1,9 +1,8 @@
-import { isRecord, LIVE_AGENT_STATUSES } from "@aegisx/shared"
+import { LIVE_AGENT_STATUSES } from "@aegisx/shared"
 import { and, eq, inArray } from "drizzle-orm"
 
 import type { Database } from "../../db"
-import { agents, domainEvents, queueState } from "../../db/schema"
-import { parseJson } from "../../lib/guards"
+import { agents, queueState } from "../../db/schema"
 import { logEvent } from "../../lib/log"
 import { FLUSH_INTERVAL_MS } from "../channels-context"
 import type { Clock } from "../clock"
@@ -19,15 +18,27 @@ import type { SendOutcome } from "../kernel"
  * engine drives ONE scheduler turn per decision point — a payload message
  * injected straight into the session (never a channel row) whose facts plus
  * the fleet digest are the decision's inputs — and correlates the turn's
- * outcome: a `submit_plan` inside the turn window closes the point `plan`
- * (an explicit noOp IS a plan); a silent turn gets ONE strict re-prompt,
- * then closes `violation`; consecutive violations escalate
- * (`watchdog.escalated` + the urgent orch notice). An all-noOp close arms
- * the stall episode (§3.7 r1): a situation still fingerprint-identical after
- * `stallMs` escalates the same alarm once per episode — the per-agent stall
- * watchdog contracted into the engine (escalation keys on decision-point
- * outcomes, never on an idle agent alone). A failed turn (provider error) is
- * never a violation — the same point re-issues after a bounded backoff.
+ * outcome: an accepted `submit_plan` TOOL call (B 批 — the native host tool,
+ * in-turn) closes the point `plan` (an explicit noOp IS a plan); a silent
+ * turn gets ONE strict re-prompt, then closes `violation`; consecutive
+ * violations escalate (`watchdog.escalated` + the urgent orch notice). An
+ * all-noOp close arms the stall episode (§3.7 r1): a situation still
+ * fingerprint-identical after `stallMs` escalates the same alarm once per
+ * episode — the per-agent stall watchdog contracted into the engine
+ * (escalation keys on decision-point outcomes, never on an idle agent
+ * alone). A failed turn (provider error) is never a violation — the same
+ * point re-issues after a bounded backoff (byte-identical to the
+ * pre-tool path, even when a plan already applied).
+ *
+ * Plan correlation is turn-generation-based (B 批): the submit_plan tool
+ * handler REGISTERS (schedulerAgentId, turnGeneration) whenever its plan's
+ * proposal landed; registration is NOT consumption — consumption happens only
+ * at the scheduler's CLEAN settle of the open point's turn, only while
+ * `open.awaiting`, and only when the registration's generation matches the
+ * settling turn's. Mismatched or stale registrations are discarded and the
+ * violation ladder proceeds exactly as if no plan had arrived. Plans
+ * submitted through the HTTP endpoint (user/system escape hatch — and the
+ * scheduler's own legacy face) do NOT register and never close a point.
  *
  * The engine is the ONE wake gate for the scheduler: queue paused or
  * scheduler paused (W3) → no decision points, no violation escalation. The
@@ -181,9 +192,6 @@ function assertNever(_t: never): never {
 type OpenPoint = {
   id: string
   triggers: DecisionTrigger[]
-  /** Service-clock ms when the payload turn started (the plan-correlation
-   * window's lower bound). */
-  startedAtMs: number
   phase: "turn" | "reprompt"
   errorRetries: number
   /** A payload turn is in flight (its settle correlates to this point). */
@@ -252,6 +260,21 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     }
     return state
   }
+
+  /** Accepted submit_plan registrations, keyed by SCHEDULER AGENT id (each
+   * event has exactly one scheduler, so the key is collision-free across
+   * events; a second registration for the same agent overwrites the first —
+   * consumption only needs to know a plan landed in the settling turn).
+   * Cleared on consumption, on discard, and whenever the scheduler lands
+   * terminal (its next runtime restarts generations at 1 — a surviving
+   * registration could otherwise falsely match). */
+  const registrations = new Map<
+    string,
+    {
+      turnGeneration: number
+      allNoOp: boolean
+    }
+  >()
 
   function agentRow(agentId: string) {
     return db.select().from(agents).where(eq(agents.id, agentId)).get()
@@ -332,7 +355,6 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     state.open = {
       id,
       triggers,
-      startedAtMs: clock.now(),
       phase: "turn",
       errorRetries: 0,
       awaiting: true,
@@ -377,10 +399,15 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
 
   // --- turn-settle correlation ----------------------------------------------------
 
-  /** From the status core, for EVERY agent turn settle. Solvers feed the
-   * `agent.settled` trigger; the scheduler's own settle either correlates to
-   * the open decision point or (a user-driven turn) re-drives pending ones. */
-  function onTurnSettled(agentId: string, error: string | null): void {
+  /** From the status core, for EVERY agent turn settle (the settling turn's
+   * generation rides along). Solvers feed the `agent.settled` trigger; the
+   * scheduler's own settle either consumes a plan registration or (a
+   * user-driven turn) re-drives pending ones. */
+  function onTurnSettled(
+    agentId: string,
+    error: string | null,
+    turnGeneration: number
+  ): void {
     if (closed) return
     const row = agentRow(agentId)
     if (!row) return
@@ -401,20 +428,27 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     }
     open.awaiting = false
     if (error) {
+      // Provider failure: NOT a violation — the same point re-issues with a
+      // fresh generation, so any plan registered inside the failed turn
+      // mismatches and is discarded there (the re-issue path is byte-
+      // identical to the pre-tool behavior, even when a plan applied).
       handleError(row.eventId)
       return
     }
-    correlatePlan(row.eventId)
+    consumePlan(row.eventId, agentId, turnGeneration)
   }
 
   /** A scheduler agent landed terminal: a decision point that was driving it
    * closes as error WITHOUT retry (a retry would cold-revive an agent the
-   * user just closed). Solver terminals feed the agent.settled trigger. */
+   * user just closed). Its plan registration dies too — a revived scheduler
+   * restarts generations at 1 and could otherwise inherit the old turn's
+   * plan. Solver terminals feed the agent.settled trigger. */
   function onAgentTerminal(agentId: string): void {
     if (closed) return
     const row = agentRow(agentId)
     if (!row) return
     if (row.role === "orchestrator") {
+      registrations.delete(agentId)
       if (stateOf(row.eventId).open) closeDecisionPoint(row.eventId, "error")
       return
     }
@@ -425,74 +459,71 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     })
   }
 
-  /** Was a `plan.proposed` by THIS scheduler submitted inside the turn
-   * window? The endpoint call arrives from the container mid-turn; the
-   * engine drove the turn, so it owns the window. */
-  function correlatePlan(eventId: string): void {
+  /** Consume the settling turn's plan registration (B 批 — replaces the
+   * plan.proposed time-window scan). A registration whose generation does
+   * not match the settling turn (stale, from an errored retry, or absent —
+   * e.g. an HTTP-endpoint submission, which never registers) is discarded
+   * and the violation ladder proceeds exactly as before. */
+  function consumePlan(
+    eventId: string,
+    schedulerId: string,
+    turnGeneration: number
+  ): void {
     const state = stateOf(eventId)
     const open = state.open
     if (!open) return
     // The user paused (halt) while the turn was in flight: the ladder stops
     // here — no re-prompt, no violation counting, the gate owns the rest.
     if (gated(eventId)) {
+      registrations.delete(schedulerId)
       closeDecisionPoint(eventId, "error")
       flushPending(eventId)
       return
     }
     const sched = schedulerRow(eventId)
     if (!sched) {
+      registrations.delete(schedulerId)
       closeDecisionPoint(eventId, "error")
       return
     }
-    for (const row of db
-      .select({ payload: domainEvents.payload })
-      .from(domainEvents)
-      .where(
-        and(
-          eq(domainEvents.eventId, eventId),
-          eq(domainEvents.type, "plan.proposed")
-        )
-      )
-      .all()) {
-      const parsed = parseJson<unknown>(row.payload)
-      if (
-        !isRecord(parsed) ||
-        parsed.schedulerAgentId !== sched.id ||
-        typeof parsed.at !== "string" ||
-        !Array.isArray(parsed.actions)
-      ) {
-        continue
-      }
-      if (Date.parse(parsed.at) < open.startedAtMs) continue
-      // A plan (noOp included) closes the point. An all-noOp plan is an
-      // explicit no-decision — it records the quiet fingerprint for the
-      // periodic skip and arms the stall episode (§3.7 r1); a real plan
-      // clears both.
-      const { fingerprint } = deps.digestOf(eventId)
-      const allNoOp =
-        parsed.actions.length > 0 &&
-        parsed.actions.every((a) => isRecord(a) && a.kind === "noOp")
-      state.quietFingerprint = allNoOp ? fingerprint : null
-      state.stall = allNoOp
-        ? {
-            pointId: open.id,
-            sinceMs: clock.now(),
-            fingerprint,
-            escalated: false,
-          }
-        : null
-      state.violations = 0
-      closeDecisionPoint(eventId, "plan")
-      flushPending(eventId)
+    const registration = registrations.get(schedulerId)
+    registrations.delete(schedulerId)
+    if (!registration || registration.turnGeneration !== turnGeneration) {
+      violationLadder(eventId, sched)
       return
     }
-    // No plan in the window — the violation ladder (§3.6 rule 3). The stall
-    // episode stays armed: a noOp followed by persistent non-deciding on an
-    // unchanged situation is exactly what it escalates.
+    // An accepted plan closes the point. An all-noOp plan is an explicit
+    // no-decision — it records the quiet fingerprint for the periodic skip
+    // and arms the stall episode (§3.7 r1); a real plan clears both.
+    const { fingerprint } = deps.digestOf(eventId)
+    state.quietFingerprint = registration.allNoOp ? fingerprint : null
+    state.stall = registration.allNoOp
+      ? {
+          pointId: open.id,
+          sinceMs: clock.now(),
+          fingerprint,
+          escalated: false,
+        }
+      : null
+    state.violations = 0
+    closeDecisionPoint(eventId, "plan")
+    flushPending(eventId)
+  }
+
+  /** The violation ladder (§3.6 rule 3), entered on a clean settle without a
+   * matching plan registration. The stall episode stays armed: a noOp
+   * followed by persistent non-deciding on an unchanged situation is exactly
+   * what it escalates. */
+  function violationLadder(
+    eventId: string,
+    sched: NonNullable<ReturnType<typeof schedulerRow>>
+  ): void {
+    const state = stateOf(eventId)
+    const open = state.open
+    if (!open) return
     if (open.phase !== "reprompt") {
       open.phase = "reprompt"
       open.awaiting = true
-      open.startedAtMs = clock.now()
       void sendReprompt(eventId, sched.id, open.id)
       return
     }
@@ -567,7 +598,6 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
         return
       }
       open.awaiting = true
-      open.startedAtMs = clock.now()
       const { digest } = deps.digestOf(eventId)
       open.digest = digest
       await sendPayload(eventId, payloadMessage(open.id, open.triggers, digest))
@@ -706,6 +736,22 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
 
   return {
     trigger,
+    /** The submit_plan tool handler's registration hop (B 批): a plan whose
+     * proposal landed in-turn is REGISTERED here; consumption happens at the
+     * turn's clean settle with a matching generation (see onTurnSettled). A
+     * turn submitting multiple plans: the last registration wins (closes the
+     * point; allNoOp taken from the last). */
+    registerPlan(registration: {
+      schedulerAgentId: string
+      turnGeneration: number
+      allNoOp: boolean
+    }): void {
+      if (closed) return
+      registrations.set(registration.schedulerAgentId, {
+        turnGeneration: registration.turnGeneration,
+        allNoOp: registration.allNoOp,
+      })
+    },
     onTurnSettled,
     onAgentTerminal,
     bootResync,
@@ -730,8 +776,8 @@ function payloadMessage(
     `触发：\n${lines.join("\n")}\n` +
     (digest ? `\n${digest}\n` : "") +
     `\n回合协议：先处理触发事项——通信保持自由文本（aegisx.channels.post 回答/广播/私信 dm:<agentId>），` +
-    `状态细节用 aegisx.snapshot() / aegisx.agents.read 现查；然后必须以 aegisx.submit_plan(rationale, actions) 收束本回合，` +
-    `确实无需行动时提交 aegisx.no_op("原因")。不交计划的回合会被重试一次并计入违约。`
+    `状态细节用 aegisx.snapshot() / aegisx.agents.read 现查；然后必须以 submit_plan 工具调用收束本回合，` +
+    `确实无需行动时提交一个 noOp 动作。回合结束时仍未以 submit_plan 收束即属违约：会被重试一次并计入违约。`
   )
 }
 
@@ -739,6 +785,6 @@ function payloadMessage(
 function repromptMessage(pointId: string): string {
   return (
     `[决策点 ${pointId.slice(0, 8)}] 违约提醒：上一回合结束仍未收到计划。` +
-    `立即调用 aegisx.submit_plan(rationale, actions) 收束（无需行动 = aegisx.no_op("原因")）——继续不交计划将升级告警。`
+    `立即以 submit_plan 工具调用收束（无需行动 = 提交一个 noOp 动作）——继续不交计划将升级告警。`
   )
 }

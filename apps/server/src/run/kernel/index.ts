@@ -1,6 +1,7 @@
 import type { AgentSummary, FlatSettings } from "@aegisx/shared"
 import { formatModelRef, isTerminalAgentStatus } from "@aegisx/shared"
 import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 
 import type { Database } from "../../db"
 import type { Clock } from "../clock"
@@ -76,6 +77,12 @@ export type AgentKernelDeps = {
    * policy + the global fence lock around the row insert. The kernel knows
    * the hook, never the fence. */
   admission: SpawnAdmission
+  /** Role-based extra host tools for ORCHESTRATOR sessions (the composition
+   * root binds the L3 submit_plan tool; the kernel knows only "the
+   * orchestrator's extras", never their content). Called at every session
+   * build (spawn AND reopen), keyed by the agent's own row — never derived
+   * from the tools snapshot. */
+  orchestratorTools(row: { id: string; eventId: string }): ToolDefinition[]
   /** Unattended appliance mode (`AEGISX_UNATTENDED=1`) — boot recovery must
    * not force event queues into `paused`. */
   unattended: boolean
@@ -257,6 +264,7 @@ export function createAgentKernel(deps: AgentKernelDeps) {
     markFinishFlagWarned: (agentId) =>
       runtimeOf(agentId).markFinishFlagWarned(),
     admission: deps.admission,
+    orchestratorTools: (row) => deps.orchestratorTools(row),
     getSettings: deps.getSettings,
     now,
     status,
@@ -510,6 +518,11 @@ export function createAgentKernel(deps: AgentKernelDeps) {
     isStreaming: (agentId: string) =>
       Boolean(runtimes.get(agentId)?.session()?.session.isStreaming),
     sessionOf: (agentId: string) => runtimes.get(agentId)?.session(),
+    /** The agent's current turn generation (0 when no runtime is live). The
+     * submit_plan tool handler stamps its engine registration with the
+     * in-flight turn's generation at call time. */
+    turnGenerationOf: (agentId: string) =>
+      runtimes.get(agentId)?.turnGeneration() ?? 0,
     workspaceKeyOf: factory.workspaceKeyOf,
     // --- workspace runtime
     ensureWorkspaceRuntimeFresh: factory.ensureWorkspaceRuntimeFresh,

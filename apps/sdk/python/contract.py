@@ -28,12 +28,12 @@ SCHEDULER_TOKEN = ARGS["scheduler-token"]
 SCHEDULER_ID = ARGS["scheduler-id"]
 SOLVER_TOKEN = ARGS["solver-token"]
 SOLVER_ID = ARGS["solver-id"]
-SOLVER2_ID = ARGS["solver2-id"]
 
 aegisx.configure(api_url=BASE_URL, event_id=EVENT_ID)
 
-# The management verbs were cut (control-plane §3.3/§3.8): submit_plan is the
-# ONE management write, everything else is reads + the channels face.
+# The management verbs were cut (control-plane §3.3/§3.8) and plan submission
+# moved INTO the scheduler's turn as the native submit_plan tool (B 批): the
+# SDK is reads + the channels face, nothing else.
 for module, gone in [
     (aegisx.queue, ("enqueue", "edit", "pause", "resume", "remove", "clear", "reorder")),
     (
@@ -43,6 +43,24 @@ for module, gone in [
 ]:
     for name in gone:
         assert not hasattr(module, name), f"{module.__name__}.{name} must be gone"
+for gone in (
+    "plan",
+    "submit_plan",
+    "enqueue",
+    "message",
+    "stop",
+    "close",
+    "finish",
+    "set_deadline",
+    "cancel_item",
+    "reorder",
+    "set_queue_paused",
+    "no_op",
+    "SubmitPlanResult",
+    "PlanRefResult",
+    "DeferredAction",
+):
+    assert not hasattr(aegisx, gone), f"aegisx.{gone} must be gone"
 
 
 def become(token: str, agent_id: str) -> None:
@@ -50,16 +68,11 @@ def become(token: str, agent_id: str) -> None:
     os.environ["AEGISX_AGENT_ID"] = agent_id
 
 
-def queue_pause() -> None:
-    """Fixture control via the user-face REST route (the SDK verb is gone)."""
-    aegisx.get_client().request(
-        "POST", aegisx.get_client().event_path("/queue/pause"), body={}
-    )
-
-
-def queue_resume() -> None:
-    aegisx.get_client().request(
-        "POST", aegisx.get_client().event_path("/queue/resume"), body={}
+def plan_post(body) -> dict:
+    """Raw plan-endpoint access (the HTTP escape hatch the SDK deliberately
+    does NOT wrap — plans go through the scheduler's native tool)."""
+    return aegisx.get_client().request(
+        "POST", aegisx.get_client().event_path("/plan"), body=body
     )
 
 
@@ -120,69 +133,32 @@ expect_error(
     "agents get error contract (not_found)",
 )
 
-# --- submit_plan (the ONE management write) -----------------------------------
-
+# Queue read views (the plan tool's landing zone — read side only here).
 assert aegisx.queue.state() == "running"
-res = aegisx.submit_plan("contract: deliberate pass", [aegisx.no_op("nothing to do")])
-first = res.results[0]
-assert first.ok and first.kind == "noOp" and first.ref, first
-ok("submit_plan noOp")
+assert isinstance(aegisx.queue.list(), list)
+ok("queue read views")
 
-# Per-ref validation errors are 200 results, not exceptions.
-res = aegisx.submit_plan("bad target", [aegisx.enqueue("ch-nope")])
-assert not res.results[0].ok and res.results[0].code == "unknown_challenge"
-res = aegisx.submit_plan("self target", [aegisx.close(SCHEDULER_ID)])
-assert res.results[0].code == "self_target"
-res = aegisx.submit_plan("stale target", [aegisx.close(SOLVER2_ID)])
-assert res.results[0].code == "wrong_state"
-ok("submit_plan per-ref validation errors")
-
-# Any failing ref rejects the WHOLE plan: the valid enqueue is NOT applied.
-queue_pause()
-res = aegisx.submit_plan(
-    "mixed",
-    [aegisx.enqueue(CHALLENGE_ID, prompt="plan probe"), aegisx.enqueue("ch-nope")],
+# The HTTP plan endpoint stays as the raw escape hatch (scheduler identity
+# admitted), while the SDK surface has no plan verb at all.
+res = plan_post(
+    {"rationale": "contract: deliberate pass", "actions": [{"ref": "n1", "kind": "noOp", "reason": "nothing to do"}]}
 )
-assert all(not r.ok for r in res.results) and res.results[0].code is None
-assert not any(i.prompt == "plan probe" for i in aegisx.queue.list())
+assert res["results"][0]["ok"] and res["results"][0]["kind"] == "noOp"
+ok("plan endpoint alive for the scheduler identity (unwrapped by the SDK)")
 
-# Plan enqueue lands in queue_after; an identical resubmission (content-derived
-# ref) is an idempotent replay — no double-enqueue.
-res = aegisx.submit_plan("plan enqueue", [aegisx.enqueue(CHALLENGE_ID, prompt="plan probe")])
-item_ref = res.results[0]
-assert item_ref.ok and item_ref.item_id
-assert any(i.id == item_ref.item_id for i in res.queue_after)
-count = len(aegisx.queue.list())
-res = aegisx.submit_plan(
-    "plan enqueue (timeout retry)", [aegisx.enqueue(CHALLENGE_ID, prompt="plan probe")]
-)
-assert res.results[0].ok, res.results[0]
-assert len(aegisx.queue.list()) == count, "idempotent replay double-enqueued"
-res = aegisx.submit_plan("ref reuse", [aegisx.no_op("different", ref=item_ref.ref)])
-assert res.results[0].code == "duplicate_ref"
-ok("submit_plan enqueue + queueAfter + idempotent replay")
+# --- plan endpoint permission + schema (raw HTTP) -----------------------------
 
-res = aegisx.submit_plan("plan cancel", [aegisx.cancel_item(item_ref.item_id, ref="c1")])
-assert res.results[0].ok
-queue_resume()
-ok("submit_plan cancelItem")
-
-# Solver face: the plan surface is scheduler-only; malformed envelope is a 400.
 become(SOLVER_TOKEN, SOLVER_ID)
 expect_error(
     "forbidden", 403,
-    lambda: aegisx.submit_plan("x", [aegisx.no_op("y")]),
-    "solver forbidden: submit_plan",
+    lambda: plan_post({"rationale": "x", "actions": [{"ref": "n1", "kind": "noOp", "reason": "y"}]}),
+    "solver forbidden: plan endpoint",
 )
 become(SCHEDULER_TOKEN, SCHEDULER_ID)
 expect_error(
     "invalid_request", 400,
-    lambda: aegisx.get_client().request(
-        "POST",
-        aegisx.get_client().event_path("/plan"),
-        body={"rationale": "x", "actions": [{"kind": "bogus"}]},
-    ),
-    "submit_plan malformed schema (400)",
+    lambda: plan_post({"rationale": "x", "actions": [{"kind": "bogus"}]}),
+    "plan endpoint malformed schema (400)",
 )
 
 team_key = f"team:{CHALLENGE_ID}"

@@ -7,9 +7,11 @@ do. This file is the usage reference; `help(aegisx)` lists exact signatures.
 
 ## Roles and surfaces
 
-- **Scheduler** (the event's orchestrator): reads everything, communicates in
-  free text, and lands every CONTROL decision — spawning, steering, stopping,
-  the queue — through ONE typed verb, `submit_plan`. Everything below.
+- **Scheduler** (the event's orchestrator): reads everything and
+  communicates in free text through this SDK. Your CONTROL decisions —
+  spawning, steering, stopping, the queue — are NOT SDK calls: you end the
+  turn with the native `submit_plan` TOOL call (below). Everything else here
+  is read + communication.
 - **Solver**: the communication face — channels (`post` / `read` / `list`) and
   `aegisx.ask`. Anything else returns `AegisxError` with `.code ==
 "forbidden"`; that answer is authoritative — never fall back to curl or the
@@ -54,59 +56,30 @@ has `.messages .has_more .next_after`. A `ChannelMessage` has `.id
 .created_at .files` — print `.author_name` and `.body`, not
 `.sender`/`.from` (those do not exist).
 
-## Submitting plans (the control surface)
+## Plans are a tool call, not an SDK verb
 
-Every management write goes through ONE verb — `submit_plan`. You produce a
-typed plan (rationale + ordered actions); the server validates it, applies
-the fast actions inline and defers the slow ones. Build actions with the
-helpers, never hand-built JSON:
+The SDK has NO management write. Every control decision lands through the
+native **`submit_plan` tool**: a 1-3 sentence `rationale` plus ordered
+`actions` (enqueue / message / stop / close / finish / setDeadline /
+cancelItem / reorder / setQueuePaused / noOp), validated and applied by the
+server. The tool's JSON schema in your session is the exact contract — read
+it from the tool definition and your system prompt; do not hand-build HTTP
+calls to the plan endpoint (as the scheduler you would only be bypassing
+your own tool, and from a solver token it is `forbidden`).
 
-    python3 - <<'PY'
-    import aegisx
-    res = aegisx.submit_plan(
-        "web-01 收官，预算转向 web-02",
-        [
-            aegisx.close("agent-a3f1"),                     # free the slot
-            aegisx.enqueue("ch-web02", prompt="pwn it"),    # refill via queue
-        ],
-    )
-    for r in res.results:
-        print(r.ref, r.kind, "ok" if r.ok else f"{r.code}: {r.message}")
-    print("deferred:", [(d.ref, d.kind) for d in res.deferred])
-    PY
+Semantics you are held to (enforced by the engine either way):
 
-Exact signatures:
-
-    aegisx.submit_plan(rationale, actions) -> SubmitPlanResult
-    aegisx.enqueue(challenge_id, prompt=None, model=None, timeout_ms=None, ref=None)
-    aegisx.message(agent_id, text, urgent=False, ref=None)
-    aegisx.stop(agent_id, ref=None) / aegisx.close(agent_id, ref=None)
-    aegisx.finish(agent_id, summary, ref=None)
-    aegisx.set_deadline(agent_id, timeout_ms, ref=None)
-    aegisx.cancel_item(item_id, ref=None) / aegisx.reorder(item_ids, ref=None)
-    aegisx.set_queue_paused(paused, ref=None)
-    aegisx.no_op(reason, ref=None)
-
-Semantics:
-
-- `rationale` is the 1-3 sentence decision reason (decision log only, never
-  executed). "Do nothing" is still a plan: `[aegisx.no_op("reason")]` — but a
-  noOp on a situation that then stays unchanged is escalated to the user as a
+- End EVERY decision-point turn with an accepted `submit_plan` call. "Do
+  nothing" is still a plan: a single `noOp` action with a reason — but a noOp
+  on a situation that then stays unchanged is escalated to the user as a
   stall alarm, so only pass when nothing genuinely needs doing.
-- Listing order IS application order; the plan is not a transaction — per-ref
-  results + the next snapshot are the recovery model.
-- `submit_plan` returns per-ref results (`r.ok` / `r.code` / `r.message`) —
-  validation errors are RESULTS, not exceptions: any failing ref rejects the
-  WHOLE plan (nothing applied), so fix the failing refs and resubmit. Only a
-  malformed envelope (HTTP 400) and auth errors raise `AegisxError`.
-- `res.queue_after` is the queue after the fast phase; `res.deferred` lists
-  the slow actions (stop/close/finish/cold wakes) whose outcomes land in the
-  plan.result decision-log entry.
-- Refs: helpers leave `ref` unset and `submit_plan` derives it from the
-  action's content — re-running the same script after a timeout replays the
-  SAME refs, so the server dedupes: identical action → original result (no
-  double-enqueue), same ref with different content → `duplicate_ref`. Pass
-  `ref=` explicitly to control correlation yourself.
+- Listing order IS application order; the plan is not a transaction. The
+  tool result carries per-ref outcomes (`ok` / `code` / `message`) plus the
+  queue after the fast phase — validation errors are RESULTS: any failing
+  ref rejects the WHOLE plan (nothing applied), so fix the failing refs and
+  resubmit within the same turn.
+- Slow actions (stop/close/finish/cold wakes) are deferred; their outcomes
+  land in the plan.result decision-log entry.
 - Targeting yourself (stop/close/finish on your own agent id) is rejected
   (`self_target`) — your lifecycle belongs to the engine and the user.
 
@@ -118,15 +91,14 @@ Semantics:
     aegisx.agents.list(challenge_id=..., status=...)   # solvers (scheduler: snapshot().scheduler_agent)
     aegisx.agents.get(id) / .read(id, limit=N)
     aegisx.queue.list() / .state()                     # read views of the plan's landing zone
-    aegisx.submit_plan(rationale, actions)             # THE control write (see above)
     aegisx.channels.list() / .read("#team" | "orch" | key) / .post("#team", text, tags=..., files=..., urgent=...)
     aegisx.channels.announce(challenge_id, text)       # FYI broadcast to the challenge's #team
     aegisx.ask(text, urgent=False, files=None)         # solver → scheduler question (orch channel)
 
-That is the whole surface: reads and the channels face are open to the
-scheduler; everything that changes lifecycle or queue state is a plan action.
-Directing ONE agent in free text is `channels.post("dm:<agentId>", ...)` (or
-a plan `message` action — urgent=True wakes it now); a #team FYI is
+That is the whole surface: reads and the channels face. Everything that
+changes lifecycle or queue state is a `submit_plan` tool action. Directing
+ONE agent in free text is `channels.post("dm:<agentId>", ...)` (or a plan
+`message` action — urgent=True wakes it now); a #team FYI is
 `channels.announce`.
 
 Channel keys are derived: `#team` (one per challenge, shared by its agents),
@@ -147,22 +119,22 @@ periodic re-examination, a boot re-sync) plus a [调度快照] block
    `challenges.get(id)` before committing to an unknown challenge. The orch
    channel is the event ledger — `channels.read("orch")` replays solver asks
    and system events.
-2. **Close EVERY decision point with one typed plan in the SAME turn:**
-   `submit_plan(rationale, [...])` — enqueue new work, steer/stop/close the
-   agents that need it. A deliberate "do nothing" is `aegisx.no_op("reason")`,
-   never silence. A turn that ends without a plan is a protocol violation:
-   the engine re-prompts once, then escalates to the user.
+2. **Close EVERY decision point with an accepted `submit_plan` TOOL call in
+   the SAME turn** — enqueue new work, steer/stop/close the agents that need
+   it. A deliberate "do nothing" is a single `noOp` action, never silence. A
+   turn that ends without one is a protocol violation: the engine re-prompts
+   once, then escalates to the user.
 3. Communication stays free-text: answer solvers on orch, broadcast to
    #team, DM a solver (`channels.post`) any time during the turn — only
    CONTROL decisions go through the plan.
-4. Read the per-ref results in the same call and repair immediately
+4. Read the per-ref results in the same tool result and repair immediately
    (`wrong_state` → re-read state; `solved_blocked` → pick another target).
    The queue drains FIFO under the caps; slow actions report via plan.result.
 5. Do not poll or sleep-loop — decision points wake you.
 
 ## Errors
 
-Every failure raises `aegisx.AegisxError` with `.code`, `.message`,
+Every SDK failure raises `aegisx.AegisxError` with `.code`, `.message`,
 `.status`. Branch on `.code`, never parse text:
 
 | code                             | meaning / response                                                                |
@@ -175,10 +147,11 @@ Every failure raises `aegisx.AegisxError` with `.code`, `.message`,
 | `internal_error`                 | Server fault — one careful retry is reasonable, then report.                      |
 | `network_error` / `bad_response` | Transport/protocol failure — one careful retry is reasonable.                     |
 
-Control errors are NOT in this table: plan validation failures are per-ref
-results on `submit_plan`'s return value (`unknown_challenge`, `wrong_state`,
-`solved_blocked`, `self_target`, `duplicate_ref`, …), and a stalled or
-misbehaving queue reports through decision points, not exceptions.
+Control errors are NOT in this table: plan validation failures arrive as the
+`submit_plan` TOOL result's per-ref outcomes (`unknown_challenge`,
+`wrong_state`, `solved_blocked`, `self_target`, `duplicate_ref`, …), and a
+stalled or misbehaving queue reports through decision points, not
+exceptions.
 
 A non-JSON error body (proxy HTML page, plain-text 404) degrades to
 `http_error` with only the HTTP status preserved — treat it as an unknown

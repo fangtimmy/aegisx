@@ -1,9 +1,10 @@
 """`aegisx.agents` — the agent-level read face.
 
 Reads only: list the fleet, inspect one agent, replay its recent message
-lines. Lifecycle and steering are the plan's business (`aegisx.submit_plan`
-with message / stop / close / finish / set_deadline actions); hitting the
-management endpoints from a solver token gets `forbidden` from the server.
+lines. Lifecycle and steering are the scheduler's native `submit_plan` TOOL
+call's business (message / stop / close / finish / setDeadline actions);
+hitting the management endpoints from a solver token gets `forbidden` from
+the server.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ def list(
 ) -> AgentSummaries:
     """The event's SOLVER agents, optionally scoped to one challenge /
     status. Use to pick an agent id for `aegisx.agents.read` or a plan
-    action's target. The scheduler agent itself is NOT included — it is
+    action's agentId. The scheduler agent itself is NOT included — it is
     `aegisx.snapshot().scheduler_agent`."""
     client = get_client()
     path = client.event_path("/fleet")

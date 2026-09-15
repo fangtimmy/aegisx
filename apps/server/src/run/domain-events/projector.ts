@@ -6,9 +6,11 @@ import {
   challengeFlags,
   challengeRemote,
   challenges,
+  planRefs,
   queueState,
   spawnQueue,
 } from "../../db/schema"
+import { canonicalActionOf } from "../plan/schema"
 import type { DomainEventPayloads, DomainEventType } from "./registry"
 
 /** The transaction-scoped handle the projector writes through (a drizzle
@@ -41,9 +43,9 @@ function payloadOf<K extends DomainEventType>(
 /**
  * THE single writer of the projection tables (agents, spawn_queue,
  * queue_state, challenge_flags, challenge_remote, the challenges control
- * fields). Every command emits its fact first; this switch performs the table
- * write inside the SAME transaction. Returns whether the projection actually
- * changed a row (guarded updates can legitimately miss).
+ * fields, plan_refs). Every command emits its fact first; this switch
+ * performs the table write inside the SAME transaction. Returns whether the
+ * projection actually changed a row (guarded updates can legitimately miss).
  */
 export function projectDomainEvent(
   tx: ProjectionDb,
@@ -562,6 +564,49 @@ export function projectDomainEvent(
       return true
     }
 
+    // --- plan_refs projection (B 批幂等投影) ----------------------------------
+
+    case "plan.proposed": {
+      const p = payloadOf("plan.proposed", event.payload)
+      // One row per action ref. First proposal owns the row (a resubmission
+      // that replays earlier refs re-lists them in its actions — identical
+      // canonical content, so the conflict is a no-op, not an overwrite).
+      for (const action of p.actions) {
+        if (typeof action.ref !== "string" || !action.ref) continue
+        tx.insert(planRefs)
+          .values({
+            eventId: event.eventId!,
+            schedulerAgentId: p.schedulerAgentId,
+            ref: action.ref,
+            canonical: canonicalActionOf(action),
+            planId: p.planId,
+            outcome: null,
+          })
+          .onConflictDoNothing()
+          .run()
+      }
+      return true
+    }
+    case "plan.result": {
+      const p = payloadOf("plan.result", event.payload)
+      // Fill the recorded outcomes of THIS plan's refs (rows owned by earlier
+      // replayed plans keep their original outcome).
+      for (const result of p.results) {
+        if (typeof result.ref !== "string" || !result.ref) continue
+        tx.update(planRefs)
+          .set({ outcome: JSON.stringify(result) })
+          .where(
+            and(
+              eq(planRefs.eventId, event.eventId!),
+              eq(planRefs.planId, p.planId),
+              eq(planRefs.ref, result.ref)
+            )
+          )
+          .run()
+      }
+      return true
+    }
+
     // --- facts without a projection ----------------------------------------
 
     case "agent.started":
@@ -571,8 +616,6 @@ export function projectDomainEvent(
     case "decision_point.opened":
     case "fence.blocked":
     case "channel.posted":
-    case "plan.proposed":
-    case "plan.result":
     case "watchdog.escalated":
       return true
   }

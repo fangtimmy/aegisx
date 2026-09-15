@@ -10,7 +10,7 @@ import { isRecord, isTerminalAgentStatus } from "@aegisx/shared"
 import { and, eq } from "drizzle-orm"
 
 import type { Database } from "../../db"
-import { agents, challenges, domainEvents, spawnQueue } from "../../db/schema"
+import { agents, challenges, planRefs, spawnQueue } from "../../db/schema"
 import type { Principal } from "../../infrastructure/agent-auth"
 import { parseJson } from "../../lib/guards"
 import { fullySolved } from "../../platforms/challenge-state"
@@ -22,6 +22,7 @@ import type { ModelResolver } from "../model-resolver"
 import { assertMayTouchEvent } from "../principal-scope"
 import type { QueueService } from "../queue"
 import { schedulerPolicyFor } from "../scheduler-policy"
+import { canonicalActionOf } from "./schema"
 
 export type PlanApplierDeps = {
   db: Database
@@ -64,12 +65,6 @@ type ActionVerdict =
     }
 
 type ActionError = { code: PlanErrorCode; message: string }
-
-/** Canonical wire form of a (flat) action for dedup comparison — key order
- * normalized so two spellings of the same action match. */
-function canonicalAction(action: PlanAction): string {
-  return JSON.stringify(action, Object.keys(action).toSorted())
-}
 
 function failureCode(error: unknown): PlanErrorCode {
   return error instanceof RunActionError && error.code === "not_found"
@@ -125,10 +120,10 @@ function envelopeProblem(plan: Plan): ActionError | null {
  * ride the per-event serial application chain, each re-validating its target
  * at application time; plan.result lands when that chain completes.
  *
- * Idempotency: the (schedulerAgentId, ref) key resolves against the plan's
- * proposal history — same ref + identical action returns the original
- * outcome without re-applying; same ref + different content is a
- * duplicate_ref rejection.
+ * Idempotency: the (schedulerAgentId, ref) key resolves against the plan_refs
+ * projection — same ref + identical action returns the original outcome
+ * without re-applying; same ref + different content is a duplicate_ref
+ * rejection.
  */
 export function createPlanApplier(deps: PlanApplierDeps) {
   const { db } = deps
@@ -137,70 +132,36 @@ export function createPlanApplier(deps: PlanApplierDeps) {
   const agentRow = (agentId: string) =>
     db.select().from(agents).where(eq(agents.id, agentId)).get()
 
-  /** The scheduler's proposal history on this event: ref → the action as
-   * proposed (plus the recorded per-ref results once plan.result landed).
-   * Latest proposal wins for a ref. */
+  /** The scheduler's recorded ref history on this event, read from the
+   * plan_refs projection (B 批 — replaces the full plan.proposed/plan.result
+   * event scan): ref → the action as first proposed, plus its outcome once
+   * plan.result landed (null while the application chain is still running). */
   function proposedHistory(
     eventId: string,
     schedulerKey: string
   ): Map<
     string,
-    { canonical: string; planId: string; results: PlanRefResult[] | null }
+    { canonical: string; planId: string; outcome: PlanRefResult | null }
   > {
-    const resultsByPlan = new Map<string, PlanRefResult[]>()
-    for (const row of db
-      .select({ payload: domainEvents.payload })
-      .from(domainEvents)
-      .where(
-        and(
-          eq(domainEvents.eventId, eventId),
-          eq(domainEvents.type, "plan.result")
-        )
-      )
-      .all()) {
-      const parsed = parseJson<unknown>(row.payload)
-      if (
-        !isRecord(parsed) ||
-        typeof parsed.planId !== "string" ||
-        !Array.isArray(parsed.results)
-      ) {
-        continue
-      }
-      // The payload registry validated the result shape at append time.
-      // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-      resultsByPlan.set(parsed.planId, parsed.results as PlanRefResult[])
-    }
     const byRef = new Map<
       string,
-      { canonical: string; planId: string; results: PlanRefResult[] | null }
+      { canonical: string; planId: string; outcome: PlanRefResult | null }
     >()
     for (const row of db
-      .select({ payload: domainEvents.payload })
-      .from(domainEvents)
+      .select()
+      .from(planRefs)
       .where(
         and(
-          eq(domainEvents.eventId, eventId),
-          eq(domainEvents.type, "plan.proposed")
+          eq(planRefs.eventId, eventId),
+          eq(planRefs.schedulerAgentId, schedulerKey)
         )
       )
       .all()) {
-      const parsed = parseJson<unknown>(row.payload)
-      if (
-        !isRecord(parsed) ||
-        typeof parsed.planId !== "string" ||
-        parsed.schedulerAgentId !== schedulerKey ||
-        !Array.isArray(parsed.actions)
-      ) {
-        continue
-      }
-      for (const action of parsed.actions) {
-        if (!isRecord(action) || typeof action.ref !== "string") continue
-        byRef.set(action.ref, {
-          canonical: JSON.stringify(action, Object.keys(action).toSorted()),
-          planId: parsed.planId,
-          results: resultsByPlan.get(parsed.planId) ?? null,
-        })
-      }
+      byRef.set(row.ref, {
+        canonical: row.canonical,
+        planId: row.planId,
+        outcome: row.outcome ? parseJson<PlanRefResult>(row.outcome) : null,
+      })
     }
     return byRef
   }
@@ -404,11 +365,10 @@ export function createPlanApplier(deps: PlanApplierDeps) {
       seen.add(action.ref)
       const prior = history.get(action.ref)
       if (!prior) continue
-      if (prior.canonical === canonicalAction(action)) {
-        const recorded = prior.results?.find((r) => r.ref === action.ref)
+      if (prior.canonical === canonicalActionOf(action)) {
         idempotent.set(
           action.ref,
-          recorded ?? {
+          prior.outcome ?? {
             ref: action.ref,
             kind: action.kind,
             ok: true,
@@ -689,6 +649,7 @@ export function createPlanApplier(deps: PlanApplierDeps) {
     }
 
     return {
+      planId,
       results,
       queueAfter: queueAfter(),
       deferred: deferred.map(({ ref, kind }) => ({ ref, kind })),

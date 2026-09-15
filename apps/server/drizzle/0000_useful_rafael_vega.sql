@@ -161,6 +161,17 @@ CREATE TABLE `events` (
 	`updated_at` text NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE `plan_refs` (
+	`event_id` text NOT NULL,
+	`scheduler_agent_id` text NOT NULL,
+	`ref` text NOT NULL,
+	`canonical` text NOT NULL,
+	`plan_id` text NOT NULL,
+	`outcome` text,
+	PRIMARY KEY(`event_id`, `scheduler_agent_id`, `ref`)
+);
+--> statement-breakpoint
+CREATE INDEX `plan_refs_plan_id_idx` ON `plan_refs` (`plan_id`);--> statement-breakpoint
 CREATE TABLE `platform_request_log` (
 	`id` text PRIMARY KEY NOT NULL,
 	`created_at` text NOT NULL,

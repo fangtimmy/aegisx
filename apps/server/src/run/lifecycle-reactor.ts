@@ -222,14 +222,15 @@ export function createLifecycleReactor(
   }
 
   return {
-    /** Idle line first, then the engine's settled feed. */
-    onTurnSettled(agentId, error) {
+    /** Idle line first, then the engine's settled feed (the settling turn's
+     * generation rides along for the engine's plan-registration match). */
+    onTurnSettled(agentId, error, turnGeneration) {
       poster(agentId, {
         type: "agent.idle",
         agentId,
         failed: Boolean(error),
       })
-      engine.onTurnSettled(agentId, error)
+      engine.onTurnSettled(agentId, error, turnGeneration)
     },
 
     /** The timedOut line (urgent) + the urgent engine trigger — solver

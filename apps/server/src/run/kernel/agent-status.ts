@@ -28,8 +28,14 @@ export type TerminalInfo = {
  */
 export type LifecycleReactor = {
   /** Turn settled: the idle lifecycle line, then the engine's settled feed
-   * (notice first, feed second). */
-  onTurnSettled(agentId: string, error: string | null): void
+   * (notice first, feed second). `turnGeneration` is the settling turn's
+   * monotonic generation — the decision engine's plan registrations are
+   * consumed only on a generation match. */
+  onTurnSettled(
+    agentId: string,
+    error: string | null,
+    turnGeneration: number
+  ): void
   /** A deadline fire's timedOut line + the urgent engine trigger (solver
    * agents only). */
   onAgentTimedOut(agentId: string, outcome: "aborted" | "idle"): void
@@ -94,9 +100,15 @@ export function createAgentStatus(deps: AgentStatusDeps) {
   }
 
   /** Mark an agent's turn settled. `error` (already logged by the runtime)
-   * settles the fact `failed`; a clean settle lands idle. The idle line and
-   * the engine's settled feed are reactor policy, in that order. */
-  function agentTurnSettled(agentId: string, error: string | null): void {
+   * settles the fact `failed`; a clean settle lands idle. `turnGeneration`
+   * is the settling turn's monotonic generation (stale turns never reach
+   * here — the runtime drops them before calling). The idle line and the
+   * engine's settled feed are reactor policy, in that order. */
+  function agentTurnSettled(
+    agentId: string,
+    error: string | null,
+    turnGeneration: number
+  ): void {
     const ts = now()
     const row = queries.getAgentRow(agentId)
     if (row) {
@@ -114,7 +126,7 @@ export function createAgentStatus(deps: AgentStatusDeps) {
       })
     }
     emitAgent(agentId)
-    deps.lifecycle().onTurnSettled(agentId, error)
+    deps.lifecycle().onTurnSettled(agentId, error, turnGeneration)
   }
 
   /** A deadline fire resolved: the timedOut line + urgent engine trigger

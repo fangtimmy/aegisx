@@ -45,12 +45,13 @@ function makeService(opts: { hang?: boolean } = {}) {
 const settle = () => new Promise((r) => setTimeout(r, 10))
 
 /**
- * Scheduler service behaviors the `aegisx` SDK maps to. The orchestrator's
- * native management tool set is EMPTY (ORCHESTRATOR_TOOLS = []) — the SDK
- * drives these service paths over HTTP, so the coverage lives here.
+ * Scheduler service behaviors. Since B 批 the orchestrator's management
+ * write is the NATIVE submit_plan tool (role-injected at session build);
+ * the snapshot records the grant, and the coverage of the service paths the
+ * applier drives lives in plan.test.ts / service-scheduler-events.test.ts.
  */
-describe("scheduler service behaviors (SDK backend)", () => {
-  test("the orchestrator agent gets NO management tools (SDK replaces them)", async () => {
+describe("scheduler service behaviors", () => {
+  test("the orchestrator's tools snapshot records exactly the native submit_plan grant", async () => {
     const made = makeService()
     try {
       const { db, service } = made
@@ -59,9 +60,7 @@ describe("scheduler service behaviors (SDK backend)", () => {
 
       expect(sched.role).toBe("orchestrator")
       const row = db.select().from(agents).where(eq(agents.id, sched.id)).get()!
-      // SDK convergence: the snapshot grants no management tools; the
-      // orchestrator manages via `aegisx` + the four file/bash tools.
-      expect(JSON.parse(row.tools)).toEqual([])
+      expect(JSON.parse(row.tools)).toEqual(["submit_plan"])
     } finally {
       await made.h.close()
     }

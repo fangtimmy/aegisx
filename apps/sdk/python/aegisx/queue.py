@@ -1,9 +1,8 @@
 """`aegisx.queue` — the read view of the event's task queue.
 
-The queue IS the plan's landing zone: `submit_plan` mutates it
-(enqueue / cancel_item / reorder / set_queue_paused — see `aegisx.plan`).
-This module is the read side: what the queue looks like right now is the
-fastest feedback on what a plan just did.
+The queue is fed by the scheduler's native `submit_plan` tool call (enqueue
+/ cancel_item / reorder / set_queue_paused are plan actions, not SDK verbs).
+This module is the read side: what the queue looks like right now.
 """
 from __future__ import annotations
 
