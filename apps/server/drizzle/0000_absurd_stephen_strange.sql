@@ -122,6 +122,15 @@ CREATE TABLE `channel_reads` (
 	PRIMARY KEY(`channel_key`, `reader_key`)
 );
 --> statement-breakpoint
+CREATE TABLE `decision_state` (
+	`event_id` text PRIMARY KEY NOT NULL,
+	`pending` text DEFAULT '[]' NOT NULL,
+	`open_point_id` text,
+	`violations` integer DEFAULT 0 NOT NULL,
+	`stall` text,
+	`quiet_fingerprint` text
+);
+--> statement-breakpoint
 CREATE TABLE `domain_events` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`type` text NOT NULL,

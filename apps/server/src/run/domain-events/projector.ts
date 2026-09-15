@@ -1,3 +1,4 @@
+import { isRecord } from "@aegisx/shared"
 import { and, eq, inArray, isNull, ne } from "drizzle-orm"
 
 import type { Database } from "../../db"
@@ -6,16 +7,22 @@ import {
   challengeFlags,
   challengeRemote,
   challenges,
+  decisionState,
   planRefs,
   queueState,
   spawnQueue,
 } from "../../db/schema"
+import type { DecisionTrigger } from "../decision-points/engine"
 import { canonicalActionOf } from "../plan/schema"
 import type { DomainEventPayloads, DomainEventType } from "./registry"
 
 /** The transaction-scoped handle the projector writes through (a drizzle
- * bun:sqlite transaction is structurally the db handle it came from). */
-export type ProjectionDb = Pick<Database, "insert" | "update" | "delete">
+ * bun:sqlite transaction is structurally the db handle it came from). The
+ * decision_state projection is read-modify-write, hence `select`. */
+export type ProjectionDb = Pick<
+  Database,
+  "insert" | "update" | "delete" | "select"
+>
 
 /** One appended fact, handed to the projector inside the append transaction. */
 export type AppendedEvent = {
@@ -28,6 +35,110 @@ export type AppendedEvent = {
 }
 
 const now = () => new Date().toISOString()
+
+function parseJsonObject(raw: string | null): Record<string, unknown> | null {
+  if (raw === null) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  return isRecord(parsed) ? parsed : null
+}
+
+function parseJsonArray(raw: string | null): unknown[] {
+  if (raw === null) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  return Array.isArray(parsed) ? parsed : []
+}
+
+/** The decision_state projection's hydrated row shape (the engine's per-event
+ * state, durable form). */
+type DecisionRow = {
+  pending: DecisionTrigger[]
+  openPointId: string | null
+  violations: number
+  stall: {
+    pointId: string
+    sinceMs: number
+    fingerprint: string
+    escalated: boolean
+  } | null
+  quietFingerprint: string | null
+}
+
+function parsePendingRow(raw: string | null): DecisionTrigger[] {
+  // The pending array was written from registry-validated payloads; this
+  // re-filter only bounds the damage a corrupted row can do.
+  return parseJsonArray(raw).filter(
+    (t): t is DecisionTrigger => isRecord(t) && typeof t.kind === "string"
+  )
+}
+
+function parseStallRow(raw: string | null): DecisionRow["stall"] {
+  const o = parseJsonObject(raw)
+  if (!o) return null
+  const { pointId, sinceMs, fingerprint, escalated } = o
+  return typeof pointId === "string" &&
+    typeof sinceMs === "number" &&
+    typeof fingerprint === "string" &&
+    typeof escalated === "boolean"
+    ? { pointId, sinceMs, fingerprint, escalated }
+    : null
+}
+
+/** Read-modify-write the event's decision_state row (defaulting to the blank
+ * state) inside the caller's transaction — the projector is the row's only
+ * writer and bun:sqlite is synchronous, so this cannot interleave. */
+function mutateDecisionState(
+  tx: ProjectionDb,
+  eventId: string,
+  mutate: (row: DecisionRow) => DecisionRow
+): void {
+  const existing = tx
+    .select()
+    .from(decisionState)
+    .where(eq(decisionState.eventId, eventId))
+    .get()
+  const current: DecisionRow = existing
+    ? {
+        pending: parsePendingRow(existing.pending),
+        openPointId: existing.openPointId,
+        violations: existing.violations,
+        stall: parseStallRow(existing.stall),
+        quietFingerprint: existing.quietFingerprint,
+      }
+    : {
+        pending: [],
+        openPointId: null,
+        violations: 0,
+        stall: null,
+        quietFingerprint: null,
+      }
+  const next = mutate(current)
+  const values = {
+    eventId,
+    pending: JSON.stringify(next.pending),
+    openPointId: next.openPointId,
+    violations: next.violations,
+    stall: next.stall === null ? null : JSON.stringify(next.stall),
+    quietFingerprint: next.quietFingerprint,
+  }
+  if (existing) {
+    tx.update(decisionState)
+      .set(values)
+      .where(eq(decisionState.eventId, eventId))
+      .run()
+  } else {
+    tx.insert(decisionState).values(values).run()
+  }
+}
 
 /** Narrow an appended fact's payload to its registered type — the registry
  * validated the shape before the append; the caller pins the type with the
@@ -43,9 +154,10 @@ function payloadOf<K extends DomainEventType>(
 /**
  * THE single writer of the projection tables (agents, spawn_queue,
  * queue_state, challenge_flags, challenge_remote, the challenges control
- * fields, plan_refs). Every command emits its fact first; this switch
- * performs the table write inside the SAME transaction. Returns whether the
- * projection actually changed a row (guarded updates can legitimately miss).
+ * fields, plan_refs, decision_state). Every command emits its fact first;
+ * this switch performs the table write inside the SAME transaction. Returns
+ * whether the projection actually changed a row (guarded updates can
+ * legitimately miss).
  */
 export function projectDomainEvent(
   tx: ProjectionDb,
@@ -607,17 +719,109 @@ export function projectDomainEvent(
       return true
     }
 
+    // --- decision_state projection (C 批：决策点状态的持久半) -------------------
+
+    case "decision_point.triggered": {
+      const p = payloadOf("decision_point.triggered", event.payload)
+      mutateDecisionState(tx, event.eventId!, (row) => ({
+        ...row,
+        pending: [...row.pending, p],
+      }))
+      return true
+    }
+    case "decision_point.opened": {
+      const p = payloadOf("decision_point.opened", event.payload)
+      // The triggers moved into the open point — pending drains with it.
+      mutateDecisionState(tx, event.eventId!, (row) => ({
+        ...row,
+        openPointId: p.id,
+        pending: [],
+      }))
+      return true
+    }
+    case "decision_point.flushed": {
+      mutateDecisionState(tx, event.eventId!, (row) => ({
+        ...row,
+        pending: [],
+      }))
+      return true
+    }
+    case "decision_point.reprompted": {
+      // Decision-log causality only: the re-prompt phase (like errorRetries)
+      // is engine memory — an interrupted point closes error/reason=boot at
+      // hydration regardless of phase, so the row needs no phase column.
+      return true
+    }
+    case "decision_point.stall_cleared": {
+      mutateDecisionState(tx, event.eventId!, (row) => ({
+        ...row,
+        stall: null,
+      }))
+      return true
+    }
+    case "decision_point.closed": {
+      const p = payloadOf("decision_point.closed", event.payload)
+      mutateDecisionState(tx, event.eventId!, (row) => {
+        // Engine parity: any close vacates the open point; a non-plan close
+        // clears the quiet fingerprint but leaves the stall episode and the
+        // violation count alone (the ladder escalates on an armed stall).
+        const next: DecisionRow = { ...row, openPointId: null }
+        if (p.outcome === "plan") {
+          next.violations = 0
+          if (p.allNoOp === true) {
+            // The explicit no-decision: record the fingerprint + arm the
+            // stall episode exactly as the payload carried it.
+            next.quietFingerprint = p.quietFingerprint ?? null
+            next.stall = {
+              pointId: p.id,
+              sinceMs: p.stallSinceMs ?? 0,
+              fingerprint: p.quietFingerprint ?? "",
+              escalated: false,
+            }
+          } else {
+            next.quietFingerprint = null
+            next.stall = null
+          }
+        } else {
+          // The ladder's violation close increments the consecutive count
+          // (the escalation fact then resets it); an error close leaves the
+          // count alone. Both clear the quiet fingerprint and keep the stall
+          // episode armed — engine parity with closeDecisionPoint + the
+          // violation ladder.
+          if (p.outcome === "violation") next.violations = row.violations + 1
+          next.quietFingerprint = null
+        }
+        return next
+      })
+      return true
+    }
+
     // --- facts without a projection ----------------------------------------
 
     case "agent.started":
     case "agent.delivered":
     case "boot.recovered":
-    case "decision_point.closed":
-    case "decision_point.opened":
     case "fence.blocked":
     case "channel.posted":
-    case "watchdog.escalated":
       return true
+    case "watchdog.escalated": {
+      // Only the engine's two reasons touch decision_state — the fleet
+      // watchdog's fleet_stalled alarm carries no decision-point state.
+      const p = payloadOf("watchdog.escalated", event.payload)
+      if (!event.eventId) return true
+      if (p.reason === "scheduler_violation") {
+        mutateDecisionState(tx, event.eventId, (row) => ({
+          ...row,
+          violations: 0,
+        }))
+      } else if (p.reason === "scheduler_stalled") {
+        mutateDecisionState(tx, event.eventId, (row) => ({
+          ...row,
+          stall: row.stall ? { ...row.stall, escalated: true } : null,
+        }))
+      }
+      return true
+    }
   }
   return true
 }

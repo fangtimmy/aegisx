@@ -968,10 +968,13 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
    * orphan container under our naming prefixes is swept deterministically;
    * running queue items reset to pending (reactor hop); queues with visible
    * items start paused (interactive only — see below). Every event with
-   * recovery activity gets a boot.recovered summary fact. */
-  async function recoverOnBoot(): Promise<void> {
+   * recovery activity gets a boot.recovered summary fact. Returns the events
+   * whose SCHEDULER was flipped from running (C 批): an interrupted turn is
+   * the decision engine's second boot.resync anchor. */
+  async function recoverOnBoot(): Promise<string[]> {
     const rows = db.select().from(agents).all()
     const ts = now()
+    const resyncEvents = new Set<string>()
     const seenQueueEvents = new Set<string>()
     const stats = new Map<
       string,
@@ -998,6 +1001,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
           payload: { from: row.status, to: "idle", at: ts },
         })
         statOf(row.eventId).liveFlipped += 1
+        if (row.role === "orchestrator") resyncEvents.add(row.eventId)
       }
       if (row.queueItemId && !seenQueueEvents.has(row.eventId)) {
         seenQueueEvents.add(row.eventId)
@@ -1056,6 +1060,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         payload: s,
       })
     }
+    return [...resyncEvents]
   }
 
   return {

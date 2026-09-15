@@ -20,7 +20,7 @@ import {
  * upgrade path; above → downgrade refused). Bump alongside regenerating the
  * baseline whenever schema.ts changes shape.
  */
-export const SCHEMA_VERSION = 27
+export const SCHEMA_VERSION = 28
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -613,6 +613,34 @@ export const domainEvents = sqliteTable(
     index("domain_events_causation_id_idx").on(table.causationId),
   ]
 )
+
+/**
+ * Decision-point state projection (C 批): the decision engine's durable half —
+ * one row per event, maintained by the projector from the decision_point fact
+ * family inside the append transaction. The engine hydrates these rows at boot
+ * (memory stays the working representation; this table is what survives a
+ * restart): `pending` is the JSON array of coalescing DecisionTriggers,
+ * `open_point_id` the decision point currently driving (an orphan at boot is
+ * closed error/reason=boot), `violations` the consecutive no-plan closes,
+ * `stall` the armed quiet-stall episode JSON, `quiet_fingerprint` the last
+ * explicit no-decision's fleet fingerprint (the periodic skip). errorRetries
+ * is deliberately absent — retry bookkeeping is lossy by design. No FK, same
+ * rule as plan_refs / domain_events: rows live for the event's lifetime and
+ * are torn down by the event-deletion path (decision engine's forget).
+ */
+export const decisionState = sqliteTable("decision_state", {
+  eventId: text("event_id").primaryKey(),
+  /** JSON array of DecisionTrigger objects awaiting the next point. */
+  pending: text("pending").notNull().default("[]"),
+  /** The open decision point's id, null when idle. */
+  openPointId: text("open_point_id"),
+  /** Consecutive no-plan closes since the last plan (or escalation). */
+  violations: integer("violations").notNull().default(0),
+  /** JSON stall episode { pointId, sinceMs, fingerprint, escalated } or null. */
+  stall: text("stall"),
+  /** Fleet fingerprint at the last explicit no-decision close, or null. */
+  quietFingerprint: text("quiet_fingerprint"),
+})
 
 /**
  * Plan-ref idempotency projection (B 批)：the applier's (scheduler, ref) dedup

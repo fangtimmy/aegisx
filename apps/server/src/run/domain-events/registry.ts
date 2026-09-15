@@ -5,6 +5,8 @@
  * optional fields. */
 import { isRecord } from "@aegisx/shared"
 
+import type { DecisionTrigger } from "../decision-points/engine"
+
 type QueueSource = "manual" | "scheduler"
 
 /** Full spawn-spec snapshot — the payload rebuilds the spawn_queue row. A
@@ -144,7 +146,7 @@ type PlanResultPayload = {
   at: string
 }
 
-// --- decision-point family (§3.6) -------------------------------------------
+// --- decision-point family (§3.6, C 批) ---------------------------------------
 
 /** One coalesced decision point opened. `triggers` are compact readable
  * lines (kind + fact) — the decision log's display form. */
@@ -153,14 +155,37 @@ type DecisionPointOpenedPayload = {
   triggers: string[]
   at: string
 }
+/** One accepted trigger recorded into the engine's pending set (gated drops
+ * emit nothing). The payload IS the DecisionTrigger — the coalescing state
+ * the projector accumulates into decision_state.pending. */
+type DecisionPointTriggeredPayload = DecisionTrigger
+/** The pending triggers were dropped without a point: the gate closed on them
+ * (`gated`) or the event has no scheduler row to decide (`no_scheduler`). */
+type DecisionPointFlushedPayload = {
+  reason: "gated" | "no_scheduler"
+  count: number
+  at: string
+}
+/** The violation ladder's ONE strict re-prompt was issued for the open point
+ * (decision-log causality; the phase itself stays engine memory only). */
+type DecisionPointRepromptedPayload = { id: string; at: string }
+/** The periodic tick cancelled an armed stall episode — the situation moved. */
+type DecisionPointStallClearedPayload = { pointId: string; at: string }
 /** The decision point resolved. `plan` = a submit_plan arrived in the turn
  * window (an explicit noOp IS a plan); `violation` = the turn(s) ended
  * without one; `error` = the turn failed (provider/session) — never counted
- * as a violation. */
+ * as a violation. Additive (C 批): an all-noOp plan close carries
+ * `allNoOp` + the `quietFingerprint` it records (arming the stall episode at
+ * `stallSinceMs`); `reason: "boot"` marks the hydration close of a point that
+ * was still open across a restart. */
 type DecisionPointClosedPayload = {
   id: string
   outcome: "plan" | "violation" | "error"
   at: string
+  allNoOp?: boolean
+  quietFingerprint?: string
+  stallSinceMs?: number
+  reason?: string
 }
 /** The converged watchdog escalation (§2.4): the fleet-stall alarm and the
  * scheduler's consecutive decision-point violations both surface here. */
@@ -298,6 +323,10 @@ export type DomainEventPayloads = {
   "plan.proposed": PlanProposedPayload
   "plan.result": PlanResultPayload
   "decision_point.opened": DecisionPointOpenedPayload
+  "decision_point.triggered": DecisionPointTriggeredPayload
+  "decision_point.flushed": DecisionPointFlushedPayload
+  "decision_point.reprompted": DecisionPointRepromptedPayload
+  "decision_point.stall_cleared": DecisionPointStallClearedPayload
   "decision_point.closed": DecisionPointClosedPayload
   "watchdog.escalated": WatchdogEscalatedPayload
 }
@@ -367,7 +396,69 @@ function validateFields(
 
 type EventDef = {
   fields: Record<string, FieldRule>
+  /** Union validator: replaces the flat field check for payloads whose shape
+   * branches on a discriminator (decision_point.triggered IS a
+   * DecisionTrigger). */
+  validate?: (payload: unknown) => string | null
 }
+
+/** decision_point.triggered's union validator: per-kind field rules over the
+ * DecisionTrigger discriminator (the engine type is the schema; these rules
+ * are its runtime face). */
+const TRIGGER_KIND_FIELDS: Record<string, Record<string, FieldRule>> = {
+  "agent.settled": {
+    agentId: { kind: "string" },
+    status: { kind: "string" },
+  },
+  "flag.accepted": {
+    challengeName: { kind: "string" },
+    tier: { kind: "string" },
+  },
+  "queue.changed": {
+    reason: { kind: "string" },
+    pending: { kind: "number", optional: true },
+  },
+  "launch.failed": {
+    challengeName: { kind: "string" },
+    error: { kind: "string" },
+  },
+  "agent.timedOut": {
+    agentId: { kind: "string" },
+    outcome: { kind: "string" },
+  },
+  "user.directive": {
+    source: { kind: "string" },
+    preview: { kind: "string", optional: true },
+    revive: { kind: "boolean", optional: true },
+  },
+  "solver.asked": {
+    authorAgentId: { kind: "string", optional: true },
+    preview: { kind: "string", optional: true },
+  },
+  "fleet.stalled": {
+    pending: { kind: "number" },
+    stalledMs: { kind: "number" },
+  },
+  periodic: {},
+  "boot.resync": {},
+}
+
+function validateTriggerPayload(payload: unknown): string | null {
+  if (!isRecord(payload)) return "payload must be an object"
+  const kind = payload.kind
+  if (typeof kind !== "string" || !(kind in TRIGGER_KIND_FIELDS)) {
+    return `unknown trigger kind "${String(kind)}"`
+  }
+  return validateFields(payload, {
+    kind: { kind: "string" },
+    ...TRIGGER_KIND_FIELDS[kind],
+  })
+}
+
+/** The DecisionTrigger kind set — decision_point.triggered's discriminator
+ * (the hydration side re-filters stored pending triggers against it). */
+export const DECISION_TRIGGER_KINDS: readonly string[] =
+  Object.keys(TRIGGER_KIND_FIELDS)
 
 /** The registry: one entry per event type. Field rules double as the payload
  * documentation — required unless `optional`, JSON-null allowed only when
@@ -642,11 +733,35 @@ const DOMAIN_EVENT_REGISTRY: {
       at: { kind: "string" },
     },
   },
+  "decision_point.triggered": { fields: {}, validate: validateTriggerPayload },
+  "decision_point.flushed": {
+    fields: {
+      reason: { kind: "string" },
+      count: { kind: "number" },
+      at: { kind: "string" },
+    },
+  },
+  "decision_point.reprompted": {
+    fields: {
+      id: { kind: "string" },
+      at: { kind: "string" },
+    },
+  },
+  "decision_point.stall_cleared": {
+    fields: {
+      pointId: { kind: "string" },
+      at: { kind: "string" },
+    },
+  },
   "decision_point.closed": {
     fields: {
       id: { kind: "string" },
       outcome: { kind: "string" },
       at: { kind: "string" },
+      allNoOp: { kind: "boolean", optional: true },
+      quietFingerprint: { kind: "string", optional: true },
+      stallSinceMs: { kind: "number", optional: true },
+      reason: { kind: "string", optional: true },
     },
   },
   "watchdog.escalated": {
@@ -664,7 +779,10 @@ export function validateDomainEventPayload<T extends DomainEventType>(
   type: T,
   payload: DomainEventPayloadOf<T>
 ): string | null {
-  return validateFields(payload, DOMAIN_EVENT_REGISTRY[type].fields)
+  const def = DOMAIN_EVENT_REGISTRY[type]
+  return def.validate
+    ? def.validate(payload)
+    : validateFields(payload, def.fields)
 }
 
 /** The decision-log type set the web view queries (§2.5). */
@@ -696,6 +814,10 @@ export const DECISION_LOG_EVENT_TYPES: DomainEventType[] = [
   "plan.proposed",
   "plan.result",
   "decision_point.opened",
+  "decision_point.triggered",
+  "decision_point.flushed",
+  "decision_point.reprompted",
+  "decision_point.stall_cleared",
   "decision_point.closed",
   "watchdog.escalated",
 ]

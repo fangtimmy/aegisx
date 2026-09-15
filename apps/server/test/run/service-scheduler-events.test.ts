@@ -575,7 +575,7 @@ describe("decision points drive the scheduler (§3.6)", () => {
     }
   })
 
-  test("recoverOnBoot re-enters via a boot.resync decision point (replaces boot-reentry)", async () => {
+  test("recoverOnBoot re-enters via boot.resync ONLY for an interrupted (running) scheduler (C 批收窄)", async () => {
     const promptLog = new Map<string, string[]>()
     let made: ReturnType<typeof makeService> | undefined
     try {
@@ -585,16 +585,32 @@ describe("decision points drive the scheduler (§3.6)", () => {
       await service.startScheduler("evt-1")
       await settle()
       const scheduler = orchestratorOf(db)
-      const primed = promptLog.get(scheduler.id)?.length ?? 0
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
-      await settle()
-      await service.spawn({ eventId: "evt-1", challengeId: "ch-1" }, USER)
+
+      // The crash shape: the restart caught the scheduler MID-TURN (the row
+      // still says running; in a real restart the runtime is gone too).
+      db.update(agents)
+        .set({ status: "running" })
+        .where(eq(agents.id, scheduler.id))
+        .run()
 
       await service.recoverOnBoot()
-      await waitUntil(
-        () => (promptLog.get(scheduler.id)?.length ?? 0) >= primed + 1
+      // The kernel flipped it idle (agent.recovered) and the engine owes the
+      // event exactly one boot.resync re-drive.
+      expect(
+        db
+          .select({ status: agents.status })
+          .from(agents)
+          .where(eq(agents.id, scheduler.id))
+          .get()?.status
+      ).toBe("idle")
+      await waitUntil(() =>
+        (promptLog.get(scheduler.id) ?? []).some((t) =>
+          t.includes("boot.resync")
+        )
       )
-      const payload = promptLog.get(scheduler.id)!.at(-1)!
+      const payload = (promptLog.get(scheduler.id) ?? []).find((t) =>
+        t.includes("boot.resync")
+      )!
       expect(payload).toContain("[决策点")
       expect(payload).toContain("boot.resync：服务已重启")
       expect(payload).toContain("重新同步")
@@ -608,6 +624,37 @@ describe("decision points drive the scheduler (§3.6)", () => {
             d.triggers.some((t: string) => t.includes("boot.resync"))
         )
       ).toBe(true)
+    } finally {
+      await made?.h.close().catch(() => undefined)
+    }
+  })
+
+  test("recoverOnBoot leaves a quiet idle scheduler untouched (zero-token restart)", async () => {
+    const promptLog = new Map<string, string[]>()
+    let made: ReturnType<typeof makeService> | undefined
+    try {
+      made = makeService(promptLog)
+      const { db, service } = made
+
+      await service.startScheduler("evt-1")
+      await settle()
+      const scheduler = orchestratorOf(db)
+      const primed = promptLog.get(scheduler.id)?.length ?? 0
+
+      await service.recoverOnBoot()
+      await settle()
+      // No prompts, no decision-point facts at all — the narrowed resync
+      // costs a quiet idle event nothing.
+      expect(promptLog.get(scheduler.id)?.length ?? 0).toBe(primed)
+      const facts = db
+        .select({ type: domainEvents.type })
+        .from(domainEvents)
+        .all()
+        .map((r) => r.type)
+      expect(facts.filter((t) => t.startsWith("decision_point."))).toHaveLength(
+        0
+      )
+      expect(facts).not.toContain("agent.recovered")
     } finally {
       await made?.h.close().catch(() => undefined)
     }

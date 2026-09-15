@@ -4,7 +4,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent"
 import { eq } from "drizzle-orm"
 
 import { createDatabase } from "../../src/db"
-import { agents, domainEvents, queueState } from "../../src/db/schema"
+import {
+  agents,
+  decisionState,
+  domainEvents,
+  queueState,
+} from "../../src/db/schema"
 import { FLUSH_INTERVAL_MS } from "../../src/run/channels-context"
 import { createFakeClock } from "../../src/run/clock"
 import {
@@ -99,6 +104,15 @@ function events(db: Db, type: string) {
     .map((row) => JSON.parse(row.payload))
 }
 
+/** The event's single decision_state projection row. */
+function stateRow(db: Db) {
+  return db
+    .select()
+    .from(decisionState)
+    .where(eq(decisionState.eventId, "evt-1"))
+    .get()!
+}
+
 /** Flush the engine's microtasks (chain + send) after a clock advance. */
 const settle = () => new Promise((r) => setTimeout(r, 5))
 
@@ -191,6 +205,12 @@ describe("decision-point engine (§3.6)", () => {
       await settle()
       expect(sends).toHaveLength(1)
       expect(sends[0]).toContain("flag.accepted：「web1」首次解出")
+      // C 批: the accepted trigger is a fact (the pending set's durable half).
+      const triggered = events(db, "decision_point.triggered")
+      expect(triggered).toHaveLength(1)
+      expect(triggered[0].kind).toBe("flag.accepted")
+      expect(triggered[0].challengeName).toBe("web1")
+      expect(stateRow(db).pending).toBe("[]") // drained into the open point
       engine.close()
     } finally {
       close()
@@ -218,6 +238,17 @@ describe("decision-point engine (§3.6)", () => {
       const closed = events(db, "decision_point.closed")
       expect(closed).toHaveLength(1)
       expect(closed[0].outcome).toBe("plan")
+      // C 批: the all-noOp close carries its fingerprint + stall arming in
+      // the payload, and the projection records both.
+      expect(closed[0].allNoOp).toBe(true)
+      expect(closed[0].quietFingerprint).toBe("fp-1")
+      const row = stateRow(db)
+      expect(row.quietFingerprint).toBe("fp-1")
+      expect(JSON.parse(row.stall!)).toMatchObject({
+        pointId: closed[0].id,
+        fingerprint: "fp-1",
+        escalated: false,
+      })
       engine.close()
     } finally {
       close()
@@ -495,7 +526,8 @@ describe("decision-point engine (§3.6)", () => {
     try {
       seedWorld(db)
 
-      // W3: scheduler disabled — nothing drives, nothing escalates.
+      // W3: scheduler disabled — nothing drives, nothing escalates, and a
+      // gated drop emits NO fact at all.
       const paused = await makeEngine(db, { schedulerPaused: true })
       paused.engine.trigger("evt-1", {
         kind: "flag.accepted",
@@ -504,6 +536,7 @@ describe("decision-point engine (§3.6)", () => {
       })
       await settle()
       expect(paused.sends).toHaveLength(0)
+      expect(events(db, "decision_point.triggered")).toHaveLength(0)
       paused.engine.close()
 
       // W2: queue paused — triggers are dropped (a later resume tells the
@@ -519,6 +552,7 @@ describe("decision-point engine (§3.6)", () => {
       })
       await settle()
       expect(sends).toHaveLength(0)
+      expect(events(db, "decision_point.triggered")).toHaveLength(0)
       db.delete(queueState).run()
       engine.trigger("evt-1", {
         kind: "queue.changed",
@@ -636,12 +670,15 @@ describe("decision-point engine (§3.6)", () => {
       await settle()
       expect(escalations).toHaveLength(1)
 
-      // The situation moves → the episode cancels; the fresh point re-judges.
+      // The situation moves → the episode cancels with its fact (C 批); the
+      // fresh point re-judges.
       seedAgent(db, { id: "a-new", status: "idle" })
       clock.advance(TIMINGS.periodicMs + TIMINGS.coalesceMs)
       await settle()
       expect(sends).toHaveLength(2)
       expect(escalations).toHaveLength(1)
+      expect(events(db, "decision_point.stall_cleared")).toHaveLength(1)
+      expect(stateRow(db).stall).toBeNull()
       // A second noOp on the new situation re-arms; it escalates again only
       // after another full stall window.
       registerPlan(engine, 2, true)
@@ -668,11 +705,16 @@ describe("decision-point engine (§3.6)", () => {
       })
       clock.advance(TIMINGS.coalesceMs)
       await settle()
-      // A plan WITH actions closes the point: nothing arms.
+      // A plan WITH actions closes the point: nothing arms (the close payload
+      // carries no all-noOp marker and the projection stays clear).
       registerPlan(engine, 1, false)
       engine.onTurnSettled("sched", null, 1)
       await settle()
-      expect(events(db, "decision_point.closed")[0].outcome).toBe("plan")
+      const closed = events(db, "decision_point.closed")
+      expect(closed[0].outcome).toBe("plan")
+      expect(closed[0].allNoOp).toBeUndefined()
+      expect(stateRow(db).quietFingerprint).toBeNull()
+      expect(stateRow(db).stall).toBeNull()
       clock.advance(TIMINGS.periodicMs + TIMINGS.stallMs + TIMINGS.coalesceMs)
       await settle()
       expect(escalations).toHaveLength(0)
@@ -682,16 +724,210 @@ describe("decision-point engine (§3.6)", () => {
     }
   })
 
-  test("boot.resync opens one re-sync decision point", async () => {
+  test("boot.resync (narrowed): an interrupted scheduler re-syncs; a quiet idle event costs nothing", async () => {
     const { db, close } = setupDbLite()
     try {
       seedWorld(db)
       const { engine, sends } = await makeEngine(db)
-      engine.bootResync()
+      // No unfinished business, no interruption → ZERO wake on restart.
+      engine.bootResync([])
+      await settle()
+      expect(sends).toHaveLength(0)
+
+      // The scheduler's turn was interrupted across the restart (the kernel
+      // flipped it running→idle and reported the event) → one resync point.
+      engine.bootResync(["evt-1"])
       await settle()
       expect(sends).toHaveLength(1)
       expect(sends[0]).toContain("boot.resync：服务已重启")
       expect(sends[0]).toContain("重新同步")
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("hydration closes an orphan open point as error/reason=boot (no eternal open point)", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      db.insert(decisionState)
+        .values({
+          eventId: "evt-1",
+          pending: "[]",
+          openPointId: "dp-orphan-1234",
+          violations: 1,
+          stall: null,
+          quietFingerprint: "fp-stale",
+        })
+        .run()
+      const { engine, sends } = await makeEngine(db)
+      const closed = events(db, "decision_point.closed")
+      expect(closed).toHaveLength(1)
+      expect(closed[0].id).toBe("dp-orphan-1234")
+      expect(closed[0].outcome).toBe("error")
+      expect(closed[0].reason).toBe("boot")
+      // The projected close also clears the point and the quiet fingerprint;
+      // the violation count survives like any error close.
+      const row = stateRow(db)
+      expect(row.openPointId).toBeNull()
+      expect(row.quietFingerprint).toBeNull()
+      expect(row.violations).toBe(1)
+      expect(sends).toHaveLength(0)
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("hydration re-drives pending triggers; the event is then owed a boot.resync", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      db.insert(decisionState)
+        .values({
+          eventId: "evt-1",
+          pending: JSON.stringify([
+            { kind: "agent.settled", agentId: "a1", status: "idle" },
+          ]),
+          openPointId: null,
+          violations: 0,
+          stall: null,
+          quietFingerprint: null,
+        })
+        .run()
+      const { engine, clock, sends } = await makeEngine(db)
+      expect(sends).toHaveLength(0)
+      // The hydrated pending re-drives through the normal coalescing window.
+      clock.advance(TIMINGS.coalesceMs)
+      await settle()
+      expect(sends).toHaveLength(1)
+      expect(sends[0]).toContain("agent.settled：agent-a1（idle）")
+      expect(stateRow(db).pending).toBe("[]")
+
+      // Close the point; then the narrowed resync still fires for THIS event
+      // (case a — unfinished business at hydration), coalesced into one turn.
+      registerPlan(engine, 1, false)
+      engine.onTurnSettled("sched", null, 1)
+      await settle()
+      expect(sends).toHaveLength(1)
+      engine.bootResync([])
+      await settle()
+      expect(sends).toHaveLength(2)
+      expect(sends[1]).toContain("boot.resync：服务已重启")
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("hydration restores the quiet fingerprint + stall episode (the periodic skip survives a restart)", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      db.insert(decisionState)
+        .values({
+          eventId: "evt-1",
+          pending: "[]",
+          openPointId: null,
+          violations: 0,
+          stall: JSON.stringify({
+            pointId: "dp-before-restart",
+            // The fake clock starts at Date.now(); the episode armed "just
+            // before the restart" so tick 1 sits inside the stall window and
+            // tick 2 crosses it.
+            sinceMs: Date.now(),
+            fingerprint: "fp-1",
+            escalated: false,
+          }),
+          quietFingerprint: "fp-1",
+        })
+        .run()
+      const { engine, clock, sends } = await makeEngine(db)
+      // First tick inside the stall window: fingerprint unchanged → skip,
+      // no burn, no escalation.
+      clock.advance(TIMINGS.periodicMs)
+      await settle()
+      expect(sends).toHaveLength(0)
+      expect(events(db, "watchdog.escalated")).toHaveLength(0)
+      // Second tick crosses stallMs → ONE stall escalation, still no turn.
+      clock.advance(TIMINGS.periodicMs)
+      await settle()
+      expect(sends).toHaveLength(0)
+      expect(events(db, "watchdog.escalated")).toHaveLength(1)
+      expect(events(db, "watchdog.escalated")[0].reason).toBe(
+        "scheduler_stalled"
+      )
+      // The escalation is persisted in the projected episode (once per
+      // episode).
+      expect(JSON.parse(stateRow(db).stall!)).toMatchObject({
+        pointId: "dp-before-restart",
+        escalated: true,
+      })
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("hydration restores the violation count (the ladder resumes where it left)", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      db.insert(decisionState)
+        .values({
+          eventId: "evt-1",
+          pending: JSON.stringify([
+            { kind: "agent.settled", agentId: "a1", status: "idle" },
+          ]),
+          openPointId: null,
+          violations: 2,
+          stall: null,
+          quietFingerprint: null,
+        })
+        .run()
+      const { engine, clock, escalations } = await makeEngine(db)
+      clock.advance(TIMINGS.coalesceMs)
+      await settle()
+      engine.onTurnSettled("sched", null, 1)
+      await settle() // strict re-prompt
+      engine.onTurnSettled("sched", null, 2)
+      await settle()
+      // 2 hydrated + 1 fresh = 3 → the bound trips on the FIRST post-restart
+      // violation; the escalation fact resets the projected count.
+      expect(events(db, "decision_point.closed")[0].outcome).toBe("violation")
+      expect(escalations).toHaveLength(1)
+      expect(escalations[0].reason).toBe("scheduler_violation")
+      expect(stateRow(db).violations).toBe(0)
+      engine.close()
+    } finally {
+      close()
+    }
+  })
+
+  test("a gate closing mid-window flushes the pending triggers with a flushed fact", async () => {
+    const { db, close } = setupDbLite()
+    try {
+      seedWorld(db)
+      const opts: { schedulerPaused?: boolean } = {}
+      const { engine, clock, sends } = await makeEngine(db, opts)
+      engine.trigger("evt-1", {
+        kind: "agent.settled",
+        agentId: "a1",
+        status: "idle",
+      })
+      expect(events(db, "decision_point.triggered")).toHaveLength(1)
+      // The user pauses BEFORE the window fires: the trigger is dropped, and
+      // the drop is observable (reason=gated + the count).
+      opts.schedulerPaused = true
+      clock.advance(TIMINGS.coalesceMs)
+      await settle()
+      expect(sends).toHaveLength(0)
+      const flushed = events(db, "decision_point.flushed")
+      expect(flushed).toHaveLength(1)
+      expect(flushed[0].reason).toBe("gated")
+      expect(flushed[0].count).toBe(1)
+      expect(JSON.parse(stateRow(db).pending)).toHaveLength(0)
       engine.close()
     } finally {
       close()

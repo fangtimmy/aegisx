@@ -70,6 +70,10 @@ const TYPE_META: Record<
   "plan.proposed": { label: "计划提交", variant: "info" },
   "plan.result": { label: "计划结果", variant: "secondary" },
   "decision_point.opened": { label: "决策点开启", variant: "warning" },
+  "decision_point.triggered": { label: "触发收集", variant: "secondary" },
+  "decision_point.flushed": { label: "触发丢弃", variant: "warning" },
+  "decision_point.reprompted": { label: "违约重申", variant: "warning" },
+  "decision_point.stall_cleared": { label: "停滞解除", variant: "success" },
   "decision_point.closed": { label: "决策点关闭", variant: "secondary" },
   "watchdog.escalated": { label: "看门狗升级", variant: "destructive" },
   "boot.recovered": { label: "开机恢复", variant: "warning" },
@@ -185,6 +189,27 @@ const DECISION_OUTCOME_META: Record<
   plan: { label: "已交计划", variant: "secondary" },
   violation: { label: "违约", variant: "destructive" },
   error: { label: "回合失败", variant: "warning" },
+}
+
+/** decision_point.triggered: the DecisionTrigger kind's readable label
+ * (kind-specific facts ride the payload and append below). */
+const DECISION_TRIGGER_KIND_LABELS: Record<string, string> = {
+  "agent.settled": "agent 回合结束",
+  "flag.accepted": "flag 通过",
+  "queue.changed": "队列变化",
+  "launch.failed": "启动失败",
+  "agent.timedOut": "agent 超时",
+  "user.directive": "用户指令",
+  "solver.asked": "solver 求援",
+  "fleet.stalled": "舰队停滞",
+  periodic: "例行复核",
+  "boot.resync": "重启重同步",
+}
+
+/** decision_point.flushed reason: why the pending triggers were dropped. */
+const DECISION_FLUSH_REASON_LABELS: Record<string, string> = {
+  gated: "闸门拦截（已暂停）",
+  no_scheduler: "无调度者",
 }
 
 const WATCHDOG_REASON_LABELS: Record<string, string> = {
@@ -430,6 +455,31 @@ function entryMain(
       if (id !== null) parts.push(monoRef(shortRef(id)))
       break
     }
+    case "decision_point.triggered": {
+      const kind = payloadString(payload, "kind")
+      if (kind !== null) {
+        parts.push(DECISION_TRIGGER_KIND_LABELS[kind] ?? kind)
+      }
+      const preview = payloadString(payload, "preview")
+      if (preview !== null) parts.push(preview)
+      break
+    }
+    case "decision_point.flushed": {
+      const reason = payloadString(payload, "reason")
+      if (reason !== null) {
+        parts.push(DECISION_FLUSH_REASON_LABELS[reason] ?? reason)
+      }
+      const count = payloadNumber(payload, "count")
+      if (count !== null && count > 0) parts.push(`丢弃 ${count} 条触发`)
+      break
+    }
+    case "decision_point.reprompted":
+    case "decision_point.stall_cleared": {
+      const id =
+        payloadString(payload, "id") ?? payloadString(payload, "pointId")
+      if (id !== null) parts.push(monoRef(shortRef(id)))
+      break
+    }
     case "decision_point.closed": {
       const outcome = payloadString(payload, "outcome")
       if (outcome !== null) {
@@ -437,6 +487,10 @@ function entryMain(
       }
       const id = payloadString(payload, "id")
       if (id !== null) parts.push(monoRef(shortRef(id)))
+      // C 批 additive facts: an all-noOp plan close and the boot-time wrap-up
+      // of a point that was still open across a restart.
+      if (payload.allNoOp === true) parts.push("全部 noOp")
+      if (payloadString(payload, "reason") === "boot") parts.push("重启收尾")
       break
     }
     case "watchdog.escalated": {

@@ -1,11 +1,12 @@
-import { LIVE_AGENT_STATUSES } from "@aegisx/shared"
-import { and, eq, inArray } from "drizzle-orm"
+import { isRecord } from "@aegisx/shared"
+import { and, eq } from "drizzle-orm"
 
 import type { Database } from "../../db"
-import { agents, queueState } from "../../db/schema"
+import { agents, decisionState, queueState } from "../../db/schema"
 import { logEvent } from "../../lib/log"
 import { FLUSH_INTERVAL_MS } from "../channels-context"
 import type { Clock } from "../clock"
+import { DECISION_TRIGGER_KINDS } from "../domain-events/registry"
 import { emitDomainEvent } from "../domain-events/store"
 import { createEffects } from "../effects"
 import { fmtMs } from "../kernel"
@@ -39,6 +40,15 @@ import type { SendOutcome } from "../kernel"
  * violation ladder proceeds exactly as if no plan had arrived. Plans
  * submitted through the HTTP endpoint (user/system escape hatch — and the
  * scheduler's own legacy face) do NOT register and never close a point.
+ *
+ * State is durable (C 批): every accepted trigger, open, flush, re-prompt and
+ * close is a domain fact, projected into `decision_state` in the append
+ * transaction; the engine hydrates those rows at construction, so violations,
+ * stall episodes, the quiet fingerprint and pending triggers survive a
+ * restart (errorRetries stays memory-only — a bounded, lossy retry budget).
+ * boot.resync is narrowed accordingly: only events with hydrated unfinished
+ * business or a scheduler whose turn the restart interrupted (kernel's
+ * running→idle flips) pay a re-sync turn — a quiet idle event restarts free.
  *
  * The engine is the ONE wake gate for the scheduler: queue paused or
  * scheduler paused (W3) → no decision points, no violation escalation. The
@@ -193,6 +203,9 @@ type OpenPoint = {
   id: string
   triggers: DecisionTrigger[]
   phase: "turn" | "reprompt"
+  /** In-memory only, lossy by design (C 批 §4.1): a crash resets the backoff
+   * count, so a hydrated point re-issues within maxErrorRetries once more —
+   * a bounded retry-budget drift, never a correctness one. */
   errorRetries: number
   /** A payload turn is in flight (its settle correlates to this point). */
   awaiting: boolean
@@ -219,6 +232,47 @@ type EventState = {
 }
 
 export type DecisionPointEngine = ReturnType<typeof createDecisionPointEngine>
+
+const TRIGGER_KINDS = new Set<string>(DECISION_TRIGGER_KINDS)
+
+/** The durable half's decode side (C 批): decision_state rows hydrate the
+ * in-memory states at construction — memory stays the working representation,
+ * the projection is what survives a restart. Both parsers bound the damage a
+ * corrupted row can do (the rows were written from validated payloads). */
+function parseTriggers(raw: string): DecisionTrigger[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  return parsed.filter(
+    (t): t is DecisionTrigger =>
+      isRecord(t) && typeof t.kind === "string" && TRIGGER_KINDS.has(t.kind)
+  )
+}
+
+function parseStall(raw: string | null): EventState["stall"] {
+  if (raw === null) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!isRecord(parsed)) return null
+  const { pointId, sinceMs, fingerprint, escalated } = parsed
+  if (
+    typeof pointId !== "string" ||
+    typeof sinceMs !== "number" ||
+    typeof fingerprint !== "string" ||
+    typeof escalated !== "boolean"
+  ) {
+    return null
+  }
+  return { pointId, sinceMs, fingerprint, escalated }
+}
 
 export type DecisionPointEngineDeps = {
   db: Database
@@ -303,11 +357,19 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
 
   // --- trigger intake ---------------------------------------------------------
 
-  /** Record a trigger. Urgent ones flush at once; the rest wait for the
+  /** Record a trigger. The fact is the durable pending push — the projector
+   * appends it to decision_state.pending in the append transaction — and
+   * memory follows it. Urgent ones flush at once; the rest wait for the
    * coalescing window so a burst (a solve's cleanup cascade) lands as one
-   * decision point. */
+   * decision point. Gated drops emit NOTHING (unchanged semantics). */
   function trigger(eventId: string, t: DecisionTrigger): void {
     if (closed || gated(eventId)) return
+    emitDomainEvent(db, {
+      type: "decision_point.triggered",
+      eventId,
+      actor: { kind: "system", actorId: "decision-engine" },
+      payload: t,
+    })
     stateOf(eventId).pending.push(t)
     if (isUrgentTrigger(t)) drive(eventId)
     else scheduleFlush(eventId)
@@ -331,13 +393,13 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     const state = stateOf(eventId)
     if (state.open || state.pending.length === 0) return
     if (gated(eventId)) {
-      state.pending = []
+      dropPending(eventId, "gated")
       return
     }
     const sched = schedulerRow(eventId)
     if (!sched) {
       // No scheduler to decide — the triggers have no consumer.
-      state.pending = []
+      dropPending(eventId, "no_scheduler")
       return
     }
     if (sched.status === "running") return // mid-turn: wait for its settle
@@ -373,6 +435,24 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
       triggers: triggers.map((t) => t.kind),
     })
     await sendPayload(eventId, payloadMessage(id, triggers, digest))
+  }
+
+  /** Clear the pending set with its fact (C 批): the two driveAwaited drop
+   * paths are observable — a gated drop and a no-scheduler drop are
+   * different stories in the decision log. */
+  function dropPending(
+    eventId: string,
+    reason: "gated" | "no_scheduler"
+  ): void {
+    const state = stateOf(eventId)
+    const count = state.pending.length
+    emitDomainEvent(db, {
+      type: "decision_point.flushed",
+      eventId,
+      actor: { kind: "system", actorId: "decision-engine" },
+      payload: { reason, count, at: deps.now() },
+    })
+    state.pending = []
   }
 
   /** Inject the payload into the scheduler's session. A failed/undelivered
@@ -494,19 +574,32 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     }
     // An accepted plan closes the point. An all-noOp plan is an explicit
     // no-decision — it records the quiet fingerprint for the periodic skip
-    // and arms the stall episode (§3.7 r1); a real plan clears both.
+    // and arms the stall episode (§3.7 r1); a real plan clears both. The
+    // close carries the arming data in its payload (the projector writes
+    // decision_state from it); memory mirrors the projection after the fact.
     const { fingerprint } = deps.digestOf(eventId)
+    const sinceMs = clock.now()
+    closeDecisionPoint(
+      eventId,
+      "plan",
+      registration.allNoOp
+        ? {
+            allNoOp: true,
+            quietFingerprint: fingerprint,
+            stallSinceMs: sinceMs,
+          }
+        : undefined
+    )
     state.quietFingerprint = registration.allNoOp ? fingerprint : null
     state.stall = registration.allNoOp
       ? {
           pointId: open.id,
-          sinceMs: clock.now(),
+          sinceMs,
           fingerprint,
           escalated: false,
         }
       : null
     state.violations = 0
-    closeDecisionPoint(eventId, "plan")
     flushPending(eventId)
   }
 
@@ -524,6 +617,13 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
     if (open.phase !== "reprompt") {
       open.phase = "reprompt"
       open.awaiting = true
+      emitDomainEvent(db, {
+        type: "decision_point.reprompted",
+        eventId,
+        agentId: sched.id,
+        actor: { kind: "system", actorId: "decision-engine" },
+        payload: { id: open.id, at: deps.now() },
+      })
       void sendReprompt(eventId, sched.id, open.id)
       return
     }
@@ -606,21 +706,31 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
 
   // --- lifecycle -----------------------------------------------------------------
 
+  /** Close the open point with its fact: the closed event (and the projection
+   * it drives) lands first, then memory drops the point. `extra` carries the
+   * additive C-批 payload facts — an all-noOp plan close's fingerprint/stall
+   * arming, or the hydration close's `reason: "boot"`. */
   function closeDecisionPoint(
     eventId: string,
-    outcome: "plan" | "violation" | "error"
+    outcome: "plan" | "violation" | "error",
+    extra?: {
+      allNoOp?: boolean
+      quietFingerprint?: string
+      stallSinceMs?: number
+      reason?: string
+    }
   ): void {
     const state = stateOf(eventId)
     const open = state.open
     if (!open) return
-    state.open = null
-    if (outcome !== "plan") state.quietFingerprint = null
     emitDomainEvent(db, {
       type: "decision_point.closed",
       eventId,
       actor: { kind: "system", actorId: "decision-engine" },
-      payload: { id: open.id, outcome, at: deps.now() },
+      payload: { id: open.id, outcome, at: deps.now(), ...extra },
     })
+    state.open = null
+    if (outcome !== "plan") state.quietFingerprint = null
     logEvent("scheduler", "decision_point_closed", {
       eventId,
       id: open.id.slice(0, 8),
@@ -675,6 +785,14 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
       const stall = state.stall
       if (stall) {
         if (stall.fingerprint !== fingerprint) {
+          // The situation moved — the episode cancels (fact first, then
+          // memory) and the periodic point below re-judges it.
+          emitDomainEvent(db, {
+            type: "decision_point.stall_cleared",
+            eventId,
+            actor: { kind: "system", actorId: "decision-engine" },
+            payload: { pointId: stall.pointId, at: deps.now() },
+          })
           state.stall = null
         } else if (
           !stall.escalated &&
@@ -704,28 +822,76 @@ export function createDecisionPointEngine(deps: DecisionPointEngineDeps) {
 
   // --- boot ----------------------------------------------------------------------
 
-  /** `recoverOnBoot`'s re-entry: every surviving live scheduler gets one
-   * re-sync decision point (replaces run/boot-reentry). */
-  function bootResync(): void {
+  /** Events whose hydrated state carried unfinished business (an orphan open
+   * point or non-empty pending) — the narrowed boot.resync's case (a). */
+  const bootUnfinished = new Set<string>()
+
+  function hydrate(): void {
+    const rows = db.select().from(decisionState).all()
+    for (const row of rows) {
+      const pending = parseTriggers(row.pending)
+      const state: EventState = {
+        pending,
+        open: null,
+        violations: row.violations,
+        quietFingerprint: row.quietFingerprint,
+        stall: parseStall(row.stall),
+      }
+      states.set(row.eventId, state)
+      if (row.openPointId) {
+        // Orphan open point: the restart interrupted its drive. Close it
+        // error/reason=boot so the decision log never shows an eternal open
+        // point — the error close clears the quiet fingerprint on both sides
+        // (projection + memory) while the stall episode and violation count
+        // survive like any error close.
+        bootUnfinished.add(row.eventId)
+        emitDomainEvent(db, {
+          type: "decision_point.closed",
+          eventId: row.eventId,
+          actor: { kind: "system", actorId: "decision-engine" },
+          payload: {
+            id: row.openPointId,
+            outcome: "error",
+            reason: "boot",
+            at: deps.now(),
+          },
+        })
+        state.quietFingerprint = null
+      }
+      if (pending.length > 0) {
+        // Un-flushed triggers re-drive through the normal coalescing window.
+        bootUnfinished.add(row.eventId)
+        scheduleFlush(row.eventId)
+      }
+    }
+  }
+
+  hydrate()
+
+  /** `recoverOnBoot`'s re-entry, narrowed (C 批 §4.3): a boot.resync decision
+   * point fires only where the restart left the scheduler a reason to
+   * re-sync — (a) the hydration found unfinished business for the event
+   * (orphan open point / non-empty pending), or (b) `interrupted` lists the
+   * events whose scheduler was RUNNING before the restart (kernel flips them
+   * via agent.recovered; the interrupted turn's cold-resumed session needs a
+   * fresh synchronization). A quiet idle event restarts at zero LLM cost. */
+  function bootResync(interrupted: readonly string[]): void {
     if (closed) return
-    const rows = db
-      .select({ eventId: agents.eventId })
-      .from(agents)
-      .where(
-        and(
-          eq(agents.role, "orchestrator"),
-          inArray(agents.status, [...LIVE_AGENT_STATUSES])
-        )
-      )
-      .all()
-    for (const { eventId } of rows) {
+    const events = new Set<string>(bootUnfinished)
+    for (const eventId of interrupted) events.add(eventId)
+    for (const eventId of events) {
       trigger(eventId, { kind: "boot.resync" })
     }
   }
 
-  /** Drop one event's in-memory state (event deletion). */
+  /** Drop one event's state (event deletion): the in-memory working copy AND
+   * its decision_state row — a direct constrained teardown, same category as
+   * the deletion paths' channels/workspace sweeps (the projector owns only
+   * the fact-driven writes, never deletes). */
   function forget(eventId: string): void {
     states.delete(eventId)
+    bootUnfinished.delete(eventId)
+    db.delete(decisionState).where(eq(decisionState.eventId, eventId)).run()
   }
 
   function close(): void {

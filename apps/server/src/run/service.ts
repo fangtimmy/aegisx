@@ -945,13 +945,16 @@ export function createAgentService(options: AgentServiceOptions) {
   }
 
   /** Boot recovery + restart re-entry. The kernel flips every live agent
-   * idle (no auto-resume); each event with a surviving live scheduler then
-   * gets ONE boot.resync decision point to re-sync and decide whether to
-   * re-dispatch (§3.7 — replaces run/boot-reentry). Events without a
-   * scheduler are left to bootstrap / the user. */
+   * idle (no auto-resume) and reports the events whose scheduler was
+   * RUNNING before the restart; the decision engine then sends a
+   * boot.resync ONLY where it is owed — those interrupted schedulers, plus
+   * the events whose hydrated decision_state carried unfinished business
+   * (§3.7/C 批 — replaces run/boot-reentry). Quiet idle events restart at
+   * zero LLM cost; events without a scheduler are left to bootstrap / the
+   * user. */
   async function recoverOnBoot(): Promise<void> {
-    await kernel.recoverOnBoot()
-    decisionEngine.bootResync()
+    const interrupted = await kernel.recoverOnBoot()
+    decisionEngine.bootResync(interrupted)
   }
 
   return {
