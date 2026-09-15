@@ -329,7 +329,7 @@ const sampleSchedulerDigestContext: SchedulerDigestContext = {
 }
 
 /** Sample context for the notice templates (`NOTICE_TEMPLATE_DEFAULTS`,
- * rendered by `run/orch-notices.ts` and `run/agent-status.ts`). One context
+ * rendered by `run/orch-notices.ts` and `run/kernel/agent-status.ts`). One context
  * covers every `notice*` key: the shipped defaults reference an
  * `{{#if}}`-guarded subset of the fields below, and a single superset avoids
  * one sample per event kind. Variables, checked against the actual defaults:

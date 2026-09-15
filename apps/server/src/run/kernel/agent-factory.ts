@@ -1,60 +1,49 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 import type { FlatSettings, ModelRef } from "@aegisx/shared"
 import { get, isActiveAgentStatus, isTerminalAgentStatus } from "@aegisx/shared"
-import type { ProviderConnection } from "@aegisx/shared/domain"
+import type { ProviderConnection, TargetState } from "@aegisx/shared/domain"
 import type { Api, Model } from "@earendil-works/pi-ai"
 import { and, eq, inArray, ne } from "drizzle-orm"
 
-import type { Database } from "../db"
+import type { Database } from "../../db"
 import {
   agents,
   challengeFlags,
   challenges,
   events,
   spawnQueue,
-} from "../db/schema"
+} from "../../db/schema"
 import {
   loadTemplateMap,
   renderTemplate,
-} from "../orchestration/prompt-templates"
-import { type Capabilities, deriveCapabilities } from "../orchestration/types"
-import { getChallengeRemote } from "../platforms/challenge-state"
-import type { createPlatformService } from "../platforms/service"
-import { generateModelsJson } from "../providers/models-json"
-import type { AgentStatus } from "./agent-status"
-import type { ChannelService } from "./channels"
-import type { SendOutcome } from "./channels-context"
-import type { ContainerManager } from "./container/container-manager"
-import { sdkContainerEnv, sdkExecEnv } from "./container/env-contract"
+} from "../../orchestration/prompt-templates"
+import {
+  type Capabilities,
+  deriveCapabilities,
+} from "../../orchestration/types"
+import { getChallengeRemote } from "../../platforms/challenge-state"
+import type { ContainerManager } from "../container/container-manager"
+import { sdkContainerEnv, sdkExecEnv } from "../container/env-contract"
 import {
   isLocalExecBackend,
   localContainerWorkspace,
-} from "./container/local-manager"
-import { emitDomainEvent } from "./domain-events/store"
-import type { DomainEventActor } from "./domain-events/store"
-import { RunActionError, RunStartError } from "./errors"
-import { checkSpawnFence } from "./fence"
-import { createAgentHost } from "./host/host"
-import type { AgentLoopSettings, HostAgentSession } from "./host/host-session"
-import type { LiveBus } from "./host/live"
-import type { ModelResolver } from "./model-resolver"
-import type { SlotModel } from "./model-resolver"
+} from "../container/local-manager"
+import type { DomainEventActor } from "../domain-events/store"
+import { emitDomainEvent } from "../domain-events/store"
+import { RunActionError, RunStartError } from "../errors"
+import { createAgentHost } from "../host/host"
+import type { AgentLoopSettings, HostAgentSession } from "../host/host-session"
+import type { LiveBus } from "../host/live"
+import type { ModelResolver, SlotModel } from "../model-resolver"
 import {
+  refreshRunModelRuntime,
   createRunModelRuntime,
   type RunModelRuntime,
   resolveRunModel,
-} from "./model-runtime"
-import type { RunPort } from "./ports"
-import {
-  buildSchedulerPromptContext,
-  buildSolverPromptContext,
-  copyAttachments,
-} from "./prompt"
-import type { AgentQueries } from "./queries"
-import type { QueueService } from "./queue"
-import { createMainTools, type AgentToolContext } from "./tools"
+} from "../model-runtime"
+import type { AgentQueries } from "../queries"
 import {
   agentContainerDir,
   agentContainerName,
@@ -65,9 +54,55 @@ import {
   orchestratorRoot,
   runtimeDir,
   workspaceDir,
-} from "./workspace-resolver"
+} from "../workspace-resolver"
+import type { SendOutcome } from "./agent-runtime"
+import type { AgentStatus, LifecycleReactor } from "./agent-status"
+import {
+  buildSchedulerPromptContext,
+  buildSolverPromptContext,
+  copyAttachments,
+} from "./prompt"
+import { createMainTools, type AgentToolContext } from "./tools"
 
-type PlatformService = ReturnType<typeof createPlatformService>
+/** Platform callbacks the agent's native tools delegate to (structural —
+ * the kernel knows the two calls, not the platform service). */
+export type KernelPlatform = {
+  submitFlag(
+    challengeId: string,
+    agentId: string,
+    flag: string | undefined,
+    verifyRemote?: boolean
+  ): Promise<
+    | {
+        status: string
+        message?: string
+        remoteId?: string
+        verified?: boolean
+      }
+    | undefined
+  >
+  targetAction(
+    challengeId: string,
+    action: "get" | "start" | "extend" | "stop"
+  ): Promise<TargetState>
+}
+
+/** Admission critical section (§分层装配): the kernel calls it with the
+ * agent-row insert; the composition root binds the fence policy check and
+ * the global fence lock around it. The kernel knows the hook concept, never
+ * the fence content or its lock. Lock-order invariant: an admission section
+ * (like every fence critical section) never runs under an agent lock, so
+ * the lock order stays acyclic. */
+export type SpawnAdmission = (
+  candidate: {
+    eventId: string
+    challengeId: string | null
+    actor: DomainEventActor
+  },
+  /** The row insert (the agent.spawned projection write) — the placeholder
+   * that counts a building agent toward the concurrency caps. */
+  insert: () => void
+) => Promise<void>
 
 /** Container env shared by scheduler and solver containers: the SDK ships
  * INSIDE the image (/opt/aegisx-sdk, PYTHONPATH preset); a host bind mount is
@@ -156,6 +191,10 @@ export type SpawnAgentInput = {
   /** 'strategy' (default) appends to the initial template; 'override'
    * replaces the first prompt entirely. */
   promptMode?: "strategy" | "override"
+  /** Orchestrator-only: the event's scheduler instruction (rendered into
+   * the prompt context) — carried in the spec by the launching scheduler
+   * admin, so the kernel never reads scheduler policy. */
+  instruction?: string
   timeoutMs?: number
   source: "manual" | "scheduler"
   /** Back-filled when the queue drainer spawns this agent. */
@@ -168,7 +207,8 @@ export type AgentFactoryDeps = {
   db: Database
   dataDir: string
   containerManager: ContainerManager
-  platformService: PlatformService
+  /** The platform calls the agent's native tools delegate to. */
+  platform: KernelPlatform
   providers: () => ProviderConnection[]
   /** Loopback origin of this server — exact-endpoint gateway providers route
    * their models.json baseUrl through /api/llm-relay here. */
@@ -180,8 +220,6 @@ export type AgentFactoryDeps = {
   modelResolver: ModelResolver
   queries: AgentQueries
   bus: LiveBus
-  /** Unified message layer core (derived-key channels). */
-  channels: ChannelService
   /** Whether the agent already has a live session mounted (prepare's
    * idempotency guard). */
   hasLiveSession(agentId: string): boolean
@@ -197,13 +235,13 @@ export type AgentFactoryDeps = {
   /** finish_run's missing-flag warning, once per agent. */
   hasFinishFlagWarned(agentId: string): boolean
   markFinishFlagWarned(agentId: string): void
-  withFence: <T>(op: () => T | Promise<T>) => Promise<T>
+  /** Admission critical section (the composition-bound fence policy). */
+  admission: SpawnAdmission
   getSettings: () => FlatSettings
   now: () => string
   status: AgentStatus
-  /** Late-bound queue port (boot recovery resets running items); bound by the
-   * assembly root before any spawn runs. */
-  queue: RunPort<QueueService>
+  /** The composition-registered L3 reactor (boot-recovery queue hops). */
+  lifecycle(): LifecycleReactor
   /** Land a failed spawn through the runtime's single terminal path (disposes
    * a session that a late failure already mounted; forgets the runtime).
    * Without a runtime the agent terminalizes straight to `failed` with the
@@ -216,16 +254,7 @@ export type AgentFactoryDeps = {
    * into `paused` (no human exists to resume them) — a surviving queue_state
    * row is honoured as-is and draining resumes. */
   unattended: boolean
-  /** Read the event's scheduler policy (scheduler-admin). */
-  getSchedulerConfig(eventId: string): {
-    eventId: string
-    modelId: string | null
-    instruction: string
-    maxConcurrentTargets: number
-  }
 }
-
-export type AgentFactory = ReturnType<typeof createAgentFactory>
 
 /** The fixed solver tool set (no inter-agent communication tools — solvers
  * coordinate via the workspace + channels). */
@@ -283,25 +312,28 @@ function solverInitialPrompt(
 }
 
 /**
- * v19 spawn + prepare + reopen orchestration (the execution unit is the
- * agent). One spawn = one agent row + a one-shot per-agent sandbox (prepare
- * creates it, settle destroys it) + the primed first turn. The workspace is
- * a derived path; the model runtime is shared per workspace (single-flighted).
+ * Agent spawn + prepare + reopen assembly (the execution unit is the
+ * agent; the kernel's spawn half). One spawn = one agent row + a one-shot
+ * per-agent sandbox (prepare creates it, settle destroys it). The kernel
+ * `prepare` verb runs: rendering → admission critical section (hook) →
+ * row insert → container + host session + tool injection — and returns the
+ * rendered launch artifacts (prime prompt + deadline) so the L3
+ * spawn-service can run the launch sequence (prime send + channel deliver).
+ * The workspace is a derived path; the model runtime is shared per
+ * workspace (single-flighted).
  */
 export function createAgentFactory(deps: AgentFactoryDeps) {
   const {
     db,
     dataDir,
     containerManager,
-    platformService,
+    platform,
     providers,
     relayOrigin,
     configVersion,
     modelResolver,
     queries,
     bus,
-    channels,
-    withFence,
     getSettings,
     now,
     status,
@@ -389,13 +421,11 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     const pending = (async () => {
       const ctx = contexts.get(workspaceKey)
       if (!ctx) return
-      const rtDir = join(ctx.rootDir, "runtime")
-      mkdirSync(rtDir, { recursive: true })
-      writeFileSync(
-        join(rtDir, "models.json"),
-        `${JSON.stringify(generateModelsJson(providers(), relayOrigin), null, 2)}\n`
-      )
-      await ctx.modelRuntime.refresh({ allowNetwork: false })
+      await refreshRunModelRuntime(ctx.modelRuntime, {
+        runtimeDir: join(ctx.rootDir, "runtime"),
+        providers: providers(),
+        relayOrigin,
+      })
       ctx.lastRefreshVersion = configVersion()
     })().finally(() => {
       runtimeRefreshes.delete(workspaceKey)
@@ -498,11 +528,10 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       agentId: row.id,
       challengeId: row.challengeId,
       submitFlag: (flag, verifyRemote = true) =>
-        platformService
+        platform
           .submitFlag(row.challengeId!, row.id, flag, verifyRemote)
           .then((r) => r ?? null),
-      targetAction: (action) =>
-        platformService.targetAction(row.challengeId!, action),
+      targetAction: (action) => platform.targetAction(row.challengeId!, action),
       /** No atomic run flag in v19: the agent self-terminates at its turn
        * settle (completed + summary). */
       requestFinish: (summary) => {
@@ -543,14 +572,19 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     }
   }
 
-  // --- spawn --------------------------------------------------------------
+  // --- prepare (the spawn verb) --------------------------------------------
 
   /**
-   * Spawn one agent: fence check (solver), model resolution, prompt
-   * rendering, agent row insert (snapshot), lazy container, workspace
-   * preparation, session prepare, and the primed first turn.
+   * The spawn sequence up to a mounted session: validation, model
+   * resolution, prompt rendering, the admission critical section (fence
+   * policy + row insert, via the hook), the sandbox build and the host
+   * session. Returns the rendered launch artifacts so the L3 spawn-service
+   * can run the launch tail (prime send + channel deliver + started).
    */
-  async function spawnAgent(input: SpawnAgentInput): Promise<string> {
+  async function prepare(
+    agentId: string,
+    input: SpawnAgentInput
+  ): Promise<{ initialPrompt: string; deadlineAt: string }> {
     const settings = getSettings()
     const templateMap = loadTemplateMap(db)
 
@@ -597,14 +631,12 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       }
     }
 
-    // Model resolution: solver → input.model → global default; scheduler →
-    // scheduler_config.modelId → global default. Unresolvable refs fail the
-    // launch with the ref in the message.
+    // Model resolution: the spec's model override → global default (the
+    // scheduler's per-event modelId override arrives in the spec, resolved
+    // by the launching scheduler admin). Unresolvable refs fail the launch
+    // with the ref in the message.
     const modelRef: ModelRef | null =
-      input.role === "solver"
-        ? (input.model ?? modelResolver.defaultModelRef())
-        : (deps.getSchedulerConfig(input.eventId).modelId ??
-          modelResolver.defaultModelRef())
+      input.model ?? modelResolver.defaultModelRef()
     const slotModel: SlotModel = modelResolver.resolveSlotModelFromRef(modelRef)
     const target = modelResolver.resolveModelTarget(slotModel.ref)
     if (!target) {
@@ -617,7 +649,6 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       throw new RunActionError("invalid_state", "Provider API key is required")
     }
 
-    const agentId = crypto.randomUUID()
     const isSolver = input.role === "solver"
     const name = isSolver ? `agent-${agentId.slice(0, 8)}` : "Scheduler"
 
@@ -694,7 +725,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       const promptContext = buildSchedulerPromptContext(
         {
           eventId: input.eventId,
-          instruction: deps.getSchedulerConfig(input.eventId).instruction,
+          instruction: input.instruction ?? "",
           model: modelConfig,
           containerWorkspace: wsCtx.containerWorkspace,
         },
@@ -721,58 +752,45 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     const ts = now()
     const source = input.source
 
-    // Reserve the concurrency slot + persist the agent row atomically under
-    // the global fence (solvers only — the scheduler never counts).
-    await withFence(async () => {
-      if (isSolver) {
-        const decision = checkSpawnFence(db, settings, {
-          eventId: input.eventId,
-          challengeId: input.challengeId!,
-        })
-        if (!decision.ok) {
-          // Every rejection leaves a trace (the decision log's raw material).
-          emitDomainEvent(db, {
-            type: "fence.blocked",
-            eventId: input.eventId,
-            challengeId: input.challengeId,
-            actor: input.actor,
-            payload: {
-              code: decision.code,
-              message: decision.message,
-              via: "spawn",
-            },
-          })
-          throw new RunActionError("capacity", decision.message)
-        }
-      }
-      // The agents row is the agent.spawned projection.
-      emitDomainEvent(db, {
-        type: "agent.spawned",
+    // Admission critical section: fence policy check + slot reservation +
+    // the agent row insert, atomically (composition-bound hook; solvers
+    // only — the scheduler never counts).
+    await deps.admission(
+      {
         eventId: input.eventId,
         challengeId: input.challengeId,
-        agentId,
         actor: input.actor,
-        payload: {
+      },
+      () => {
+        // The agents row is the agent.spawned projection.
+        emitDomainEvent(db, {
+          type: "agent.spawned",
           eventId: input.eventId,
           challengeId: input.challengeId,
-          role: input.role,
-          name,
-          model: slotModel.ref,
-          systemPrompt,
-          tools,
-          prompt: input.prompt ?? null,
-          source,
-          timeoutMs,
-          deadlineAt: deadlineAtIso,
-          queueItemId: input.queueItemId ?? null,
-          createdAt: ts,
-        },
-      })
-    })
+          agentId,
+          actor: input.actor,
+          payload: {
+            eventId: input.eventId,
+            challengeId: input.challengeId,
+            role: input.role,
+            name,
+            model: slotModel.ref,
+            systemPrompt,
+            tools,
+            prompt: input.prompt ?? null,
+            source,
+            timeoutMs,
+            deadlineAt: deadlineAtIso,
+            queueItemId: input.queueItemId ?? null,
+            createdAt: ts,
+          },
+        })
+      }
+    )
 
-    // Build the container outside the fence lock (slow I/O). On failure the
-    // row is landed failed through the single terminal path (it counted live
-    // as idle while building). Mark failed + rethrow.
+    // Build the container outside the admission section (slow I/O). On
+    // failure the row is landed failed through the single terminal path (it
+    // counted live as idle while building). Mark failed + rethrow.
     try {
       await ensureContainerFor({ ...probe, id: agentId }, wsCtx)
       // The agent's own directory (host side; the container sees it via the
@@ -786,34 +804,18 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         )
       }
       await prepareAgent(agentId)
-      await deps.send(agentId, initialPrompt)
-      // Onboarding: a fresh agent's channel cursor is 0 — one deliver sweeps
-      // the challenge's whole #team history (prior attempts' findings +
-      // announce) into the first turn's tail.
-      channels.deliver(agentId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // Land through the runtime's single terminal path. A failure after the
-      // session was mounted (send / delivery) otherwise strands a runtime
-      // entry holding a live session; settling disposes that session and
-      // forgets the runtime. Without a runtime this is the plain terminalize
-      // (with the launch error recorded, completedAt nulled).
+      // session was mounted otherwise strands a runtime entry holding a live
+      // session; settling disposes that session and forgets the runtime.
+      // Without a runtime this is the plain terminalize (with the launch
+      // error recorded, completedAt nulled).
       await deps.settleFailedSpawn(agentId, `Failed to start agent: ${message}`)
       throw new RunActionError("launch_failed", message)
     }
 
-    deps.armDeadline(agentId, deadlineAtIso)
-    status.emitAgent(agentId)
-    status.emitAgentEvent(agentId, { type: "agent.started", agentId })
-    emitDomainEvent(db, {
-      type: "agent.started",
-      eventId: input.eventId,
-      challengeId: input.challengeId,
-      agentId,
-      actor: input.actor,
-      payload: {},
-    })
-    return agentId
+    return { initialPrompt, deadlineAt: deadlineAtIso }
   }
 
   function challengeSupported(
@@ -826,7 +828,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
     )
   }
 
-  // --- prepare / resume ------------------------------------------------------
+  // --- prepareAgent / resumeAgent --------------------------------------------
 
   /** Prepare one agent's environment: workspace context + container online +
    * this agent's session online. Unified for fresh spawn (no sessionFile →
@@ -938,7 +940,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
         payload: { at: now() },
       })
       status.emitAgent(agentId)
-      status.emitAgentEvent(agentId, { type: "agent.reopened", agentId })
+      deps.lifecycle().onAgentReopened(agentId)
     }
     deps.armDeadline(agentId, row.deadlineAt)
   }
@@ -949,9 +951,9 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
    * workspaces on binds/volumes, sessions in the DB). Live agents flip to
    * idle (a message reopens them and prepare rebuilds the sandbox); every
    * orphan container under our naming prefixes is swept deterministically;
-   * running queue items reset to pending; queues with visible items start
-   * paused (interactive only — see below). Every event with recovery
-   * activity gets a boot.recovered summary fact. */
+   * running queue items reset to pending (reactor hop); queues with visible
+   * items start paused (interactive only — see below). Every event with
+   * recovery activity gets a boot.recovered summary fact. */
   async function recoverOnBoot(): Promise<void> {
     const rows = db.select().from(agents).all()
     const ts = now()
@@ -968,6 +970,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       }
       return s
     }
+    const lifecycle = deps.lifecycle()
     for (const row of rows) {
       if (row.status !== "running" && row.status !== "idle") continue
       if (row.status === "running") {
@@ -983,7 +986,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       }
       if (row.queueItemId && !seenQueueEvents.has(row.eventId)) {
         seenQueueEvents.add(row.eventId)
-        deps.queue.get().resetRunning(row.eventId)
+        lifecycle.onBootQueueReset(row.eventId)
         statOf(row.eventId).queuesReset = 1
       }
     }
@@ -1016,7 +1019,7 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
       .groupBy(spawnQueue.eventId)
       .all()
     if (deps.unattended) {
-      if (pendingEvents.length > 0) deps.queue.get().scheduleDrain()
+      if (pendingEvents.length > 0) lifecycle.onBootDrain()
     } else {
       for (const { eventId } of pendingEvents) {
         emitDomainEvent(db, {
@@ -1041,20 +1044,13 @@ export function createAgentFactory(deps: AgentFactoryDeps) {
   }
 
   return {
-    spawnAgent,
+    prepare,
     prepareAgent,
     resumeAgent,
     recoverOnBoot,
-    buildAgentToolContext,
-    contexts,
-    ensureWorkspaceContext,
-    ensureContainerFor,
-    sandboxNameOf,
-    refreshWorkspaceRuntime,
     ensureWorkspaceRuntimeFresh,
     forgetWorkspace,
     workspaceKeyOf,
-    rootDirOf,
   }
 }
 

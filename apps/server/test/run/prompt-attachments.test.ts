@@ -11,7 +11,10 @@ import {
   seedBuiltinTemplates,
 } from "../../src/orchestration/prompt-templates"
 import { deriveCapabilities } from "../../src/orchestration/types"
-import { buildSolverPromptContext, copyAttachments } from "../../src/run/prompt"
+import {
+  buildSolverPromptContext,
+  copyAttachments,
+} from "../../src/run/kernel/prompt"
 import { seedChallenge, seedEvent, setupDb } from "../helpers"
 
 describe("copyAttachments", () => {

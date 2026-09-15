@@ -5,12 +5,12 @@ import type { Database } from "../../db"
 import { agents, domainEvents, queueState } from "../../db/schema"
 import { parseJson } from "../../lib/guards"
 import { logEvent } from "../../lib/log"
-import { fmtMs } from "../agent-runtime"
-import type { SendOutcome } from "../channels-context"
 import { FLUSH_INTERVAL_MS } from "../channels-context"
 import type { Clock } from "../clock"
 import { emitDomainEvent } from "../domain-events/store"
 import { createEffects } from "../effects"
+import { fmtMs } from "../kernel"
+import type { SendOutcome } from "../kernel"
 
 /**
  * The decision-point engine (control-plane design §3.6): the deterministic
@@ -209,6 +209,8 @@ type EventState = {
     escalated: boolean
   } | null
 }
+
+export type DecisionPointEngine = ReturnType<typeof createDecisionPointEngine>
 
 export type DecisionPointEngineDeps = {
   db: Database

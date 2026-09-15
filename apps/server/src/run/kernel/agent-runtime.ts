@@ -1,17 +1,29 @@
 import { eq } from "drizzle-orm"
 
-import type { Database } from "../db"
-import { agents } from "../db/schema"
+import type { Database } from "../../db"
+import { agents } from "../../db/schema"
+import type { Clock, ClockTimer } from "../clock"
+import { createTimerHub } from "../clock"
+import { emitDomainEvent, type DomainEventActor } from "../domain-events/store"
+import { RunActionError } from "../errors"
+import type { HostAgentSession } from "../host/host-session"
 import type { AgentStatus } from "./agent-status"
-import type { SendOutcome } from "./channels-context"
-import type { Clock, ClockTimer } from "./clock"
-import { createTimerHub } from "./clock"
-import { emitDomainEvent, type DomainEventActor } from "./domain-events/store"
-import { RunActionError } from "./errors"
-import type { HostAgentSession } from "./host/host-session"
 
 /** Grace between deadline-abort and a forced session dispose. */
 const TIMEOUT_GRACE_MS = 30_000
+
+/** The runtime send's result: what the delivery engine needs to know about
+ * an ACCEPTED delivery (the via path + the delivered text size) — the
+ * agent.delivered fact's payload source. The send verb's own type: defined
+ * in the kernel, re-exported through its public exit, consumed by the
+ * channel layer and the decision-point engine. */
+export type SendOutcome =
+  | { delivered: false }
+  | {
+      delivered: true
+      via: "steer" | "followUp" | "fresh" | "cold_resume"
+      chars: number
+    }
 
 /** 时间格式化（快照行与 SDK `fmt_ms` 共用格式约定）：
  *  3500 → "4s"；210000 → "3m30s"；-45000 → "-45s(超时)"。 */
@@ -51,7 +63,8 @@ export type SettleOptions = {
 
 export type AgentRuntimeDeps = {
   db: Database
-  /** Status core: turn markers, the terminal landing, the orch event feed. */
+  /** Status core: turn markers, the terminal landing, the outbound reactor
+   * hops. */
   status: AgentStatus
   /** Time layer: arms the deadline/grace timers, bounds aborts. */
   clock: Clock
@@ -60,11 +73,11 @@ export type AgentRuntimeDeps = {
   /** Test seam passthrough: grace between deadline-abort and a forced
    * dispose. */
   timeoutGraceMs?: number
-  /** The service's per-agent lock — turns serialize against bespoke ops
-   * (create / close / finish / ...) and a service close rejects them. */
+  /** The kernel's per-agent lock — turns serialize against bespoke ops
+   * (create / close / finish / ...) and a closed kernel rejects them. */
   withLock<T>(agentId: string, op: () => T | Promise<T>): Promise<T>
   now(): string
-  /** Drop the runtime from the service's registry (settle). */
+  /** Drop the runtime from the kernel's registry (settle). */
   forget(agentId: string): void
   /** Destroy the agent's one-shot sandbox container (settle only — dispose
    * leaves it for the boot sweep). Fire-and-forget; failures are logged by
@@ -80,10 +93,9 @@ export type AgentRuntime = ReturnType<typeof createAgentRuntime>
  * One live agent's ENTIRE in-process ownership root: the mounted host
  * session, the monotonic turn generation, the finish_run bookkeeping, the
  * deadline/grace timers, and the single terminal path. Nothing per-agent
- * lives anywhere else — the run service holds
- * `Map<agentId, AgentRuntime>` and every terminal flow converges on
- * {@link AgentRuntime.settle}, so "forgetting to clear one registry" is
- * structurally impossible.
+ * lives anywhere else — the kernel holds `Map<agentId, AgentRuntime>` and
+ * every terminal flow converges on {@link AgentRuntime.settle}, so
+ * "forgetting to clear one registry" is structurally impossible.
  *
  * Turn driving (send → drive → generation-checked settle) previously lived in
  * the shared session lifecycle; it now runs against this runtime's own
@@ -160,7 +172,7 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
         deps.status.agentTurnSettled(agentId, error)
       })
       .catch((err) => {
-        // A service close mid-turn rejects the lock with invalid_state — a
+        // A kernel close mid-turn rejects the lock with invalid_state — a
         // settling turn racing shutdown is expected, not an error.
         if (err instanceof RunActionError && err.code === "invalid_state")
           return
@@ -304,11 +316,9 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
             by: { kind: "system", actorId: "deadline" },
           })
         }
-        deps.status.emitAgentEvent(agentId, {
-          type: "agent.timedOut",
-          agentId,
-          outcome: stillStreaming ? "aborted" : "idle",
-        })
+        // The timedOut lifecycle line + the urgent engine trigger are L3
+        // reactions — reached through the composition-registered reactor.
+        deps.status.agentTimedOut(agentId, stillStreaming ? "aborted" : "idle")
       }, timeoutGraceMs)
     }, delay)
   }
@@ -376,7 +386,7 @@ export function createAgentRuntime(agentId: string, deps: AgentRuntimeDeps) {
   }
 
   /** Release the in-process resources WITHOUT landing a DB state (terminal
-   * statuses go through settle; service close calls this per runtime). */
+   * statuses go through settle; kernel close calls this per runtime). */
   async function dispose(): Promise<void> {
     hub.disposeAll()
     deadlineTimer = undefined

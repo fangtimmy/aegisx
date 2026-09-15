@@ -1,17 +1,17 @@
 import type { AgentSessionSummary, AgentSummary } from "@aegisx/shared"
 import { and, asc, count, eq, gt, inArray } from "drizzle-orm"
 
-import type { Database } from "../db"
-import { agents, sessionEntries, sessions } from "../db/schema"
-import type { Principal } from "../infrastructure/agent-auth"
-import { actorFromPrincipal, emitDomainEvent } from "./domain-events/store"
-import { RunActionError } from "./errors"
-import type { HostAgentSession } from "./host/host-session"
-import { assertMayTouchAgent } from "./principal-scope"
+import type { Database } from "../../db"
+import { agents, sessionEntries, sessions } from "../../db/schema"
+import type { DomainEventActor } from "../domain-events/store"
+import { emitDomainEvent } from "../domain-events/store"
+import { RunActionError } from "../errors"
+import type { HostAgentSession } from "../host/host-session"
 
-/** Dependencies the run service injects — the ops share its db, per-agent
+/** Dependencies the kernel injects — the ops share its db, per-agent
  * locks, the agents' mounted sessions, and call back into prepareAgent /
- * emit helpers. */
+ * resumeAgent / the bus emit. Scope assertions are the composition
+ * facade's business; the ops take the already-resolved event actor. */
 export type AgentSessionOpsDeps = {
   db: Database
   /** The agent's mounted live session, if any. */
@@ -30,12 +30,15 @@ export type AgentSessionOpsDeps = {
   now(): string
 }
 
-/** Multi-session + flat backtrack (v12) operations. Sessions are per-agent
- * conversation threads: exactly one is active (agents.sessionFile), /new
- * creates a fresh one, activate switches the pointer (old sessions stay in
- * the DB), backtrack truncates the active one flat (no pi tree-branching —
- * the abandoned tail is physically deleted). All ops require an idle agent
- * (a running turn is rejected, matching /compact). */
+/**
+ * Multi-session + flat backtrack (v12) operations — kernel verbs over the
+ * per-agent session threads. Sessions are per-agent conversation threads:
+ * exactly one is active (agents.sessionFile), create starts a fresh one,
+ * activate switches the pointer (old sessions stay in the DB), backtrack
+ * truncates the active one flat (no pi tree-branching — the abandoned tail
+ * is physically deleted). All ops require an idle agent (a running turn is
+ * rejected, matching compact).
+ */
 export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
   const { db } = deps
 
@@ -57,12 +60,12 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
   }
 
   /** The agent.session_switched fact — its projection moves the active
-   * session pointer (null = /new, which makes the next prepare build a
-   * fresh session). */
+   * session pointer (null = fresh session, which makes the next prepare
+   * build a new one). */
   function emitSessionSwitched(
     agentId: string,
     sessionId: string | null,
-    principal: Principal
+    actor: DomainEventActor
   ): void {
     const { eventId, challengeId } = dimsOf(agentId)
     emitDomainEvent(db, {
@@ -70,7 +73,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
       eventId,
       challengeId,
       agentId,
-      actor: actorFromPrincipal(principal),
+      actor,
       payload: { sessionId, at: deps.now() },
     })
   }
@@ -96,9 +99,9 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
   }
 
   /** Rebuild the agent's live session after a session-pointer change
-   * (/new / activate / backtrack): dispose the old one, then re-prepare from
-   * the (possibly new) active session. Terminal agents rebuild lazily on
-   * the next send (prepareAgent via onResume). */
+   * (create / activate / backtrack): dispose the old one, then re-prepare
+   * from the (possibly new) active session. Terminal agents rebuild lazily
+   * on the next send (prepareAgent via onResume). */
   async function rebuildAgentSession(agentId: string): Promise<void> {
     await disposeLiveAgent(agentId)
     await deps.prepareAgent(agentId)
@@ -106,17 +109,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
 
   /** List an agent's sessions (oldest first) with per-session message counts
    * and the active flag (the current sessionFile pointer). */
-  function listAgentSessions(
-    agentId: string,
-    principal: Principal
-  ): AgentSessionSummary[] {
-    const row = db
-      .select({ id: agents.id, eventId: agents.eventId })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .get()
-    if (!row) throw new RunActionError("not_found", "Agent not found")
-    assertMayTouchAgent(principal, row)
+  function listSessions(agentId: string): AgentSessionSummary[] {
     const rows = db
       .select()
       .from(sessions)
@@ -154,16 +147,15 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
 
   /** Create a brand-new session for the agent and make it active (/new). Old
    * sessions stay in the DB (switchable). Requires an idle agent. */
-  async function createAgentSession(
+  async function createSession(
     agentId: string,
-    principal: Principal
+    actor: DomainEventActor
   ): Promise<AgentSummary> {
-    assertMayTouchAgent(principal, deps.requireAgent(agentId))
     return deps.withLock(agentId, async () => {
       requireIdleAgent(agentId)
       // Nulling the pointer makes prepareAgent's createHost build a fresh
       // PiSessionAdapter (new sessions row) and write the new id back.
-      emitSessionSwitched(agentId, null, principal)
+      emitSessionSwitched(agentId, null, actor)
       await rebuildAgentSession(agentId)
       deps.emitAgent(agentId)
       return deps.requireAgent(agentId)
@@ -172,12 +164,11 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
 
   /** Switch the agent's active session. The target must be one of the
    * agent's own sessions. Requires an idle agent. */
-  async function activateAgentSession(
+  async function activateSession(
     agentId: string,
     sessionId: string,
-    principal: Principal
+    actor: DomainEventActor
   ): Promise<AgentSummary> {
-    assertMayTouchAgent(principal, deps.requireAgent(agentId))
     return deps.withLock(agentId, async () => {
       const row = db
         .select()
@@ -203,7 +194,7 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
         currentStatus === "completed" ||
         currentStatus === "aborted" ||
         currentStatus === "failed"
-      emitSessionSwitched(agentId, sessionId, principal)
+      emitSessionSwitched(agentId, sessionId, actor)
       await disposeLiveAgent(agentId)
       // A terminal agent's switch is a reopen: converge through the same
       // path as a cold resume (idle flip + reopened event + timers), not a
@@ -225,12 +216,10 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
    * session is rebuilt so pi re-derives its in-memory context (pi caches
    * `agent.state.messages` at session creation; a bare DB delete would not
    * take effect). Requires an idle agent. */
-  async function backtrackAgent(
+  async function backtrack(
     agentId: string,
-    seq: number,
-    principal: Principal
+    seq: number
   ): Promise<AgentSummary> {
-    assertMayTouchAgent(principal, deps.requireAgent(agentId))
     return deps.withLock(agentId, async () => {
       requireIdleAgent(agentId)
       const agentRow = db
@@ -274,9 +263,9 @@ export function createAgentSessionOps(deps: AgentSessionOpsDeps) {
     requireIdleAgent,
     disposeLiveAgent,
     rebuildAgentSession,
-    listAgentSessions,
-    createAgentSession,
-    activateAgentSession,
-    backtrackAgent,
+    listSessions,
+    createSession,
+    activateSession,
+    backtrack,
   }
 }

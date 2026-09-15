@@ -11,6 +11,7 @@ import { agents, challenges, channelMessages, channelReads } from "../db/schema"
 import type { Clock } from "./clock"
 import { RunActionError } from "./errors"
 import type { LiveBus } from "./host/live"
+import type { SendOutcome } from "./kernel"
 
 export type ChannelMessageRow = typeof channelMessages.$inferSelect
 
@@ -76,17 +77,6 @@ export type AttachmentInput = {
   stream: () => Promise<Uint8Array>
   size: number
 }
-
-/** The runtime send's result: what the delivery engine needs to know about
- * an ACCEPTED delivery (the via path + the delivered text size) — the
- * agent.delivered fact's payload source. */
-export type SendOutcome =
-  | { delivered: false }
-  | {
-      delivered: true
-      via: "steer" | "followUp" | "fresh" | "cold_resume"
-      chars: number
-    }
 
 export type ChannelServiceDeps = {
   db: Database

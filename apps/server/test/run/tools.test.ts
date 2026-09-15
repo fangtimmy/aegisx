@@ -3,7 +3,10 @@ import { describe, expect, test } from "bun:test"
 import type { TargetState } from "@aegisx/shared/domain"
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent"
 
-import { createMainTools, type AgentToolContext } from "../../src/run/tools"
+import {
+  createMainTools,
+  type AgentToolContext,
+} from "../../src/run/kernel/tools"
 import { refine } from "../support"
 
 function mockCtx(overrides: Partial<AgentToolContext> = {}): AgentToolContext {

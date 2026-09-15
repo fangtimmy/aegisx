@@ -47,3 +47,15 @@ export function schedulerPolicyFor(
     blockSpawnOnSolved: row?.blockSpawnOnSolved ?? true,
   }
 }
+
+/** Whether the event's scheduler is paused (W3) — the shared read behind the
+ * agent-event emit gates (poster, notices, decision engine). A paused
+ * scheduler receives nothing on its orch channel and no decision points. */
+export function schedulerPausedFor(db: Database, eventId: string): boolean {
+  const row = db
+    .select({ paused: schedulerConfig.paused })
+    .from(schedulerConfig)
+    .where(eq(schedulerConfig.eventId, eventId))
+    .get()
+  return row?.paused ?? false
+}

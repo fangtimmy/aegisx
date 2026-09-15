@@ -298,7 +298,7 @@ export const DEFAULT_CHANNEL_DELIVERY_TEMPLATE = `[当前时间] {{now}}
 
 /** System→agent notice templates: one per typed notice event
  * (`run/orch-notices.ts`), plus the agent lifecycle lines
- * (`run/agent-status.ts`) — every system→agent channel text renders from
+ * (`run/kernel/agent-status.ts`) — every system→agent channel text renders from
  * this store, so a user edit to any of them takes effect on the next
  * message. (The scheduler's own wakes are decision-point payloads rendered
  * by the engine — not channel rows, not templates here.)
@@ -337,7 +337,7 @@ export const NOTICE_TEMPLATE_DEFAULTS = {
    * stall watchdog, §3.7 r1). */
   noticeSchedulerStalled: `调度停滞：调度者在 {{decisionPointId}} 判定无需行动后，局面已持续 {{stalled}} 无变化——请人工确认该判断是否仍成立。`,
 
-  // --- agent lifecycle lines (run/agent-status.ts) ---------------------------
+  // --- agent lifecycle lines (run/kernel/agent-status.ts) ---------------------------
   // The orch event ledger the scheduler reads; `tag` is the pre-derived
   // 「challengeName」agent-<id8> label, the machine shape lives in meta.
   /** agent.started */

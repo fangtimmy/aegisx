@@ -43,6 +43,32 @@ export async function createRunModelRuntime(options: {
   })
 }
 
+/** Regenerate models.json from the current providers and hot-reload an
+ * existing workspace ModelRuntime. The refresh half of the workspace
+ * runtime lifecycle (build = {@link createRunModelRuntime}); used at
+ * prepare/switch boundaries so a cached runtime picks up provider/apiKey/
+ * metadata edits without a server restart. */
+export async function refreshRunModelRuntime(
+  runtime: RunModelRuntime,
+  options: {
+    runtimeDir: string
+    providers: ProviderConnection[]
+    /** Loopback origin of this server (see {@link createRunModelRuntime}). */
+    relayOrigin: string
+  }
+): Promise<void> {
+  mkdirSync(options.runtimeDir, { recursive: true })
+  writeFileSync(
+    join(options.runtimeDir, "models.json"),
+    `${JSON.stringify(
+      generateModelsJson(options.providers, options.relayOrigin),
+      null,
+      2
+    )}\n`
+  )
+  await runtime.refresh({ allowNetwork: false })
+}
+
 /** Resolve the SDK Model for a (provider, modelId) selection.
  *
  * `modelId` may be either the provider-model UUID `id` (as the create flow

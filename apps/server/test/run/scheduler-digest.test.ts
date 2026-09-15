@@ -11,8 +11,7 @@ import {
 } from "../../src/db/schema"
 import { DEFAULT_SCHEDULER_DIGEST_TEMPLATE } from "../../src/orchestration/prompt-defaults"
 import { renderTemplateBody } from "../../src/orchestration/prompt-templates"
-import { createAgentQueries } from "../../src/run/queries"
-import { createSchedulerAdmin } from "../../src/run/scheduler-admin"
+import { createSchedulerDigest } from "../../src/run/scheduler-digest"
 import {
   flatSettings,
   seedChallenge,
@@ -20,20 +19,16 @@ import {
   seedSessionEntry,
   now,
 } from "../helpers"
-import { refine } from "../support"
 
 function setup() {
   const dir = `/tmp/aegisx-digest-${crypto.randomUUID()}`
   const { db, releaseLock } = createDatabase(dir)
-  const admin = createSchedulerAdmin({
+  const digest = createSchedulerDigest({
     db,
-    queries: createAgentQueries({ db }),
     getSettings: flatSettings,
     now,
-    providers: () => [],
-    modelResolver: refine({}),
   })
-  return { db, admin, close: () => releaseLock() }
+  return { db, admin: digest, close: () => releaseLock() }
 }
 
 function seedLiveAgent(

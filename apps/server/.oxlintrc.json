@@ -17,6 +17,27 @@
       }
     },
     {
+      "files": ["src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "./kernel/*",
+                  "../kernel/*",
+                  "./run/kernel/*",
+                  "../run/kernel/*"
+                ],
+                "message": "The agent kernel's only public exit is run/kernel/index.ts — import it as './kernel' or '../kernel', never a deep kernel file path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["src/run/host/**"],
       "rules": {
         "no-restricted-imports": [
@@ -36,6 +57,40 @@
                   "!../../lib/**"
                 ],
                 "message": "run/host is the innermost agent-session layer: it must not import orchestration or route modules (run/service, run/queue, run/drainer, run/routes, run/scheduler-admin, run/agent-factory, run/sse, scheduler/, events/, platforms/ ...). Allowed: run leaf modules (errors, bash-tool, model-runtime), run/container/**, run/workspace/**, db/, lib/."
+              },
+              {
+                "group": [
+                  "./kernel/*",
+                  "../kernel/*",
+                  "./run/kernel/*",
+                  "../run/kernel/*"
+                ],
+                "message": "The agent kernel's only public exit is run/kernel/index.ts — import it as './kernel' or '../kernel', never a deep kernel file path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "src/run/*.ts",
+        "src/run/plan/**",
+        "src/run/decision-points/**"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "./kernel/*",
+                  "../kernel/*",
+                  "./run/kernel/*",
+                  "../run/kernel/*"
+                ],
+                "message": "The agent kernel's only public exit is run/kernel/index.ts — import it as './kernel' or '../kernel', never a deep kernel file path."
               }
             ]
           }
@@ -65,6 +120,52 @@
               {
                 "group": ["./host/**", "../run/host/**", "./run/host/**"],
                 "message": "Route layers must not reach into run/host/* internals; go through the service or the public outlet (run/host/index.ts)."
+              },
+              {
+                "group": [
+                  "./kernel/*",
+                  "../kernel/*",
+                  "./run/kernel/*",
+                  "../run/kernel/*"
+                ],
+                "message": "The agent kernel's only public exit is run/kernel/index.ts — import it as './kernel' or '../kernel', never a deep kernel file path."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/run/kernel/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "../**",
+                  "!../bash-tool",
+                  "!../clock",
+                  "!../effects",
+                  "!../locks",
+                  "!../errors",
+                  "!../model-runtime",
+                  "!../model-resolver",
+                  "!../queries",
+                  "!../host/**",
+                  "!../container/**",
+                  "!../workspace/**",
+                  "!../workspace-resolver",
+                  "!../domain-events/**",
+                  "!../../db",
+                  "!../../db/**",
+                  "!../../lib/**",
+                  "!../../orchestration/prompt-templates",
+                  "!../../orchestration/types",
+                  "!../../platforms/challenge-state"
+                ],
+                "message": "run/kernel is the L2 agent kernel: it must not import L3/L4 control-plane or face modules (queue, drainer, fence, channels*, decision-points, plan, orch-notices, fleet-watchdog, scheduler-admin, scheduler-policy, spawn-service, lifecycle-reactor, flag-hooks, scheduler-digest, workspace-face, routes, sse, public, events/, settings/, providers/, scheduler/, activity/, infrastructure/). Allowed: run leaves (clock, effects, locks, errors, bash-tool, model-runtime, model-resolver, queries, domain-events), run/host/**, run/container/**, run/workspace/**, run/workspace-resolver, db/, lib/, plus the shared prompt/domain reads orchestration/prompt-templates, orchestration/types, platforms/challenge-state."
               }
             ]
           }

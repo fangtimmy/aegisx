@@ -2,17 +2,17 @@ import { describe, expect, test } from "bun:test"
 
 import { createDatabase } from "../../src/db"
 import { agents } from "../../src/db/schema"
+import { createChannelService } from "../../src/run/channels"
+import { createFakeClock } from "../../src/run/clock"
+import type { HostAgentSession } from "../../src/run/host/host-session"
+import { createLiveBus } from "../../src/run/host/live"
 import {
   createAgentRuntime,
   fmtMs,
   type AgentRuntime,
   type AgentRuntimeDeps,
-} from "../../src/run/agent-runtime"
-import type { AgentStatus } from "../../src/run/agent-status"
-import { createChannelService } from "../../src/run/channels"
-import { createFakeClock } from "../../src/run/clock"
-import type { HostAgentSession } from "../../src/run/host/host-session"
-import { createLiveBus } from "../../src/run/host/live"
+} from "../../src/run/kernel/agent-runtime"
+import type { AgentStatus } from "../../src/run/kernel/agent-status"
 import { seedChallenge, seedEvent, now } from "../helpers"
 import { refine } from "../support"
 

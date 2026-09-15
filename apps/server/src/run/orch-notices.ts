@@ -3,8 +3,8 @@ import type { ChannelMessageMeta } from "@aegisx/shared/channels"
 import type { Principal } from "../infrastructure/agent-auth"
 import { NOTICE_TEMPLATE_DEFAULTS } from "../orchestration/prompt-defaults"
 import { renderTemplateBody } from "../orchestration/prompt-templates"
-import { fmtMs } from "./agent-runtime"
 import { orchKey, teamKey, type PostInput } from "./channels-context"
+import { fmtMs } from "./kernel"
 
 /** The system → scheduler/team notification protocol, as typed events.
  *
@@ -322,6 +322,8 @@ export function renderNotice(
 ): string {
   return renderTemplateBody(templateBody, delivery.context)
 }
+
+export type NoticePublisher = ReturnType<typeof createNoticePublisher>
 
 export type NoticePublisherDeps = {
   /** Builtin template body for a notice key: the stored (user-editable) row

@@ -9,21 +9,21 @@ import type {
 import { eventBriefFor, parseEventPromptBrief } from "@aegisx/shared"
 import { and, asc, eq } from "drizzle-orm"
 
-import type { Database } from "../db"
+import type { Database } from "../../db"
 import {
   attachments,
   challengeFlags,
   type challenges,
   eventPlatforms,
   events,
-} from "../db/schema"
-import type { PromptContext } from "../orchestration/types"
+} from "../../db/schema"
+import type { PromptContext } from "../../orchestration/types"
 import {
   type ChallengeRemote,
   isPlatformIntegrated,
-} from "../platforms/challenge-state"
-import { RunStartError } from "./errors"
-import { agentId8 } from "./workspace-resolver"
+} from "../../platforms/challenge-state"
+import { RunStartError } from "../errors"
+import { agentId8 } from "../workspace-resolver"
 
 type Challenge = typeof challenges.$inferSelect
 
