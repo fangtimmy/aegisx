@@ -86,7 +86,7 @@ armDeadline(agentId, iso)
 
 ### 3.1 机制【已定】
 
-内核在组装 **orchestrator** 会话时注入宿主侧原生工具 `submit_plan`（与 solver 的文件工具同机制；按 role 注入，不依赖 spawn 快照的 tools 列）。工具的 JSON Schema 与 HTTP 端点共用同一份 TypeBox 计划 schema——该 schema 今天住在 `run/routes.ts:183`，B 批先上移 `@aegisx/shared`（加法演进），工具与端点共用单一来源。注入机制已实证可行：宿主侧自定义工具走 pi 的 `extraTools` 通路（`host.ts:114-121`），`agent.session_prepared` 的 toolDefinitions 快照自动收录新工具（`agent-factory.ts:908-918`）。失去容器 HTTP 通道无回归：计划端点的唯一 agent 调用方就是调度者（`agent-auth.ts:111-114`），用户无 token 直调，`submitPlan` 无其他消费方。handler 进程内直呼 plan applier（以该调度者的 agent principal），`SubmitPlanResult`（含 `queueAfter`）作为 tool result 同回合返回。控制通道不再经过容器 HTTP，「调度者行动能力与容器共享失效域」的代价随之消失。
+内核在组装 **orchestrator** 会话时注入宿主侧原生工具 `submit_plan`（与 solver 的文件工具同机制；按 role 注入，不依赖 spawn 快照的 tools 列）。工具的 JSON Schema 与 HTTP 端点共用同一份 TypeBox 计划 schema——shared 受「无 runtime 代码路径」约束不进 TypeBox，单一来源落驻 `run/plan/schema.ts`（shared 只进纯 wire 类型增补），工具与端点共用同一 schema。注入机制已实证可行：宿主侧自定义工具走 pi 的 `extraTools` 通路（`host.ts:114-121`），`agent.session_prepared` 的 toolDefinitions 快照自动收录新工具（`agent-factory.ts:908-918`）。失去容器 HTTP 通道无回归：计划端点的唯一 agent 调用方就是调度者（`agent-auth.ts:111-114`），用户无 token 直调，`submitPlan` 无其他消费方。handler 进程内直呼 plan applier（以该调度者的 agent principal），`SubmitPlanResult`（含 `queueAfter`）作为 tool result 同回合返回。控制通道不再经过容器 HTTP，「调度者行动能力与容器共享失效域」的代价随之消失。
 
 计划校验、`plan.proposed`/`plan.result` 事实化、快慢两相应用、per-event 单飞链——**全部不变**。变化的只有提交载体与关联方式。
 
@@ -178,7 +178,7 @@ EventStats 的 per-agent `toolCalls`（`stats.ts:62/348`）与逐工具分解 `t
 依赖关系：A 的内核边界是 B 的注入点、C/D 的归属地；B 与 C 都重塑 engine（相邻落地）；D 独立但借用 B 建立的「控制面投影表」手法。串行四批，每批 `bun run check` + `bun run test`（动 SDK 面的批次加 `test:sdk`）全绿再进：
 
 1. **A 分层装配**（行为不变重排，无 schema 变化）：抽内核（runtimes 注册表 + factory + settle + 状态核）→ fence 出 factory 入 L3 spawn-service → service.ts 解散为薄组合面 → ports.ts 删除 → lint 边界扩展。现有 service 级测试全程不动地跑绿（它们是行为锚）。
-2. **B 计划原生工具化**（基线 v27：`plan_refs`）：TypeBox 计划 schema 上移 shared → 内核为 orchestrator 注入 submit_plan 工具（extraTools 通路）→ applier 登记接线（回合代际绑定）+ 幂等改读投影 → engine 关联切换 → SDK 砍面 + contract 更新 → 语料重写（本批最长杆，门禁含 `test:sdk`）。
+2. **B 计划原生工具化**（基线 v27：`plan_refs`）：计划 schema 收敛单一来源（`run/plan/schema.ts`，shared 保持零 runtime）→ 内核为 orchestrator 注入 submit_plan 工具（extraTools 通路）→ applier 登记接线（回合代际绑定）+ 幂等改读投影 → engine 关联切换 → SDK 砍面 + contract 更新 → 语料重写（本批最长杆，门禁含 `test:sdk`）。
 3. **C 决策点状态事件化**（基线 v28：`decision_state` + decision_point 事件族扩展）：触发/打开/重申/flushed 事实化 → 投影维护 → 引擎水合 + boot.resync 收窄（fake clock 全族回归）。
 4. **D 读模型与保留**（基线 v29：`usage_rollups` + `usage_tool_rollups`）：条目写入补显式事务 + rollup/回溯扣减重算 → stats/catalog 重写 → SSE id + Last-Event-ID + web 补洞重连（committed 事件加 sessionId；请求代际守卫保留）→ conversation-store 拆除无序竞态半边 → 归档 + 透明解档。
 
@@ -217,12 +217,12 @@ EventStats 的 per-agent `toolCalls`（`stats.ts:62/348`）与逐工具分解 `t
 | 14 | NIT | 薄组合面须承诺纯接线转发 → §2.2 明示 |
 | 15 | NIT | 写放大与重入安全性核实通过（触发频率 = 回合量级；trigger 调用点均在事务外）；批序成立，B 语料是最长杆 |
 
-## 11. 实施记录（2026-09-15 同日落地）
+## 11. 实施记录（2026-09-15/16 落地）
 
 | 批次 | 内容 | 提交 |
 |---|---|---|
 | A | `run/kernel/` 抽出（index.ts 组装 + runtimes 注册表与动词面、agent-factory 含 admission 钩子、agent-runtime 唯一终态路径、agent-status 状态事实半区、agent-session-ops 多会话/回溯）；fence 出 factory 入 L3，`spawn-service.ts` 为 launch 入口，`lifecycle-reactor.ts` 承接状态副作用面；`service.ts` 解散为薄组合面（只接线转发 + principal 断言）；`ports.ts` 与全部 late-binding 槽位删除；oxlint 边界扩展（kernel 只许经 index 公共出口） | `e9661a8` |
-| B | TypeBox 计划 schema 上移 `@aegisx/shared`；orchestrator 会话注入宿主侧原生 `submit_plan` 工具（extraTools 通路，spawn 与重开一致，不读 tools 快照），handler 进程内直呼 applier 并以回合代际登记；`plan_refs` 投影表（schema v27）承接幂等查重；SDK 删除 submit_plan 与全部 plan 助手（contract 负断言）；调度者语料重写为工具收束协议 | `efa96ce` |
+| B | 计划 schema 单一来源落驻 `run/plan/schema.ts`（shared 保持零 runtime，仅进 wire 类型）；orchestrator 会话注入宿主侧原生 `submit_plan` 工具（extraTools 通路，spawn 与重开一致，不读 tools 快照），handler 进程内直呼 applier 并以回合代际登记；`plan_refs` 投影表（schema v27）承接幂等查重；SDK 删除 submit_plan 与全部 plan 助手（contract 负断言）；调度者语料重写为工具收束协议 | `efa96ce` |
 | C | `decision_point.triggered / flushed / reprompted / stall_cleared` 事实化 + `decision_state` 投影表（schema v28，projector 同事务维护）；引擎构造时水合、重启不丢（孤儿 open point 以 `closed(outcome=error, reason=boot)` 收尾）；`boot.resync` 收窄为未决业务或 running 打断两类，安静 idle 赛事零唤醒 | `8e71563` |
 | D | `usage_rollups` / `usage_tool_rollups` 投影（schema v29）：adapter 条目写显式事务内增量推进，回溯同事务删后从并档读整体重算；stats / catalog 单赛事直读 / 调度者 digest / 会话列表 messageCount 全部改读投影；SSE 频道帧携带账本 `id:` + Last-Event-ID 账本重放；`message.committed` 加 sessionId、web 端 `(sessionId, seq)` 双键游标 + 全量快照整体替换 + `sessionHeadSeq` 截断探测；会话归档（`data/archive/sessions/`，按 seq 并集合并）+ 透明并档读 + 保留清扫（`data.sessionRetentionDays`，默认 30） | （本提交） |
 
@@ -234,3 +234,5 @@ EventStats 的 per-agent `toolCalls`（`stats.ts:62/348`）与逐工具分解 `t
 - 同一调度者回合多次 `submit_plan` 时登记 **last-wins**（引擎取最后一次登记，正文未指定多计划语义）。
 - `decision_point.reprompted` 仅作决策日志因果；reprompt 相位本身仍在引擎内存（正文同判，落地予以确认）。
 - §5.1 的 session × 日维度 rollup（`usage_day_rollups`）在实施评审中**删除**：零消费方，仅为「以防以后需要」的日维度维护写放大不成立（n1 裁定）；需要时随真实消费方一起再加。
+- 计划 schema **未上移 `@aegisx/shared`**（§3.1/§7 的「上移 shared」表述按此勘误）：shared 的「无 runtime 代码路径」约束排除了 TypeBox 落点，单一来源改为落驻 `run/plan/schema.ts`，shared 仅收纯 wire 类型增补；「工具与端点共用单一 schema」的设计意图不变。
+- 登记通道收敛到**工具 handler**：经 HTTP 端点提交的计划（含持调度者身份的调用）一律不登记、不关闭决策点——旧时间窗语义会给 HTTP 提交记账。SDK 已无计划动词，端点保留为用户逃生舱；引擎 docstring 已声明该语义。
